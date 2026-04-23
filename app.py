@@ -189,26 +189,28 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
-    f_text = ""
+    # 🌟 들여쓰기 버그 수정: 문자열을 결합하지 않고 리스트에 모은 후 한 번에 합침
+    f_lines = []
     if pbr is not None:
         pbr_threshold = 2.0 if any(s in str(sector).lower() for s in ['technology', 'healthcare', 'software', 'bio']) else 1.2
-        if pbr < pbr_threshold * 0.8: f_text += f"✅ **PBR({pbr:.2f})**: 자산 가치 대비 **저평가** 매력이 있습니다.\n\n"
-        elif pbr > pbr_threshold * 1.5: f_text += f"⚠️ **PBR({pbr:.2f})**: 장부 가치 대비 **고평가** 프리미엄이 상당합니다.\n\n"
-        else: f_text += f"➖ **PBR({pbr:.2f})**: 자산 가치 대비 적정 수준입니다.\n\n"
+        if pbr < pbr_threshold * 0.8: f_lines.append(f"✅ **PBR({pbr:.2f})**: 자산 가치 대비 **저평가** 매력이 있습니다.")
+        elif pbr > pbr_threshold * 1.5: f_lines.append(f"⚠️ **PBR({pbr:.2f})**: 장부 가치 대비 **고평가** 프리미엄이 상당합니다.")
+        else: f_lines.append(f"➖ **PBR({pbr:.2f})**: 자산 가치 대비 적정 수준입니다.")
         
     if per is not None:
         if per < 0: 
-            f_text += f"🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.\n\n"
+            f_lines.append("🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.")
         elif peer_per is not None and peer_per > 0:
-            if per < peer_per * 0.8: f_text += f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)\n\n"
-            elif per > peer_per * 1.2: f_text += f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.\n\n"
-            else: f_text += f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.\n\n"
+            if per < peer_per * 0.8: f_lines.append(f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)")
+            elif per > peer_per * 1.2: f_lines.append(f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.")
+            else: f_lines.append(f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.")
         else:
-            if per < 15.0: f_text += f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.\n\n"
-            elif per > 30.0: f_text += f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.\n\n"
-            else: f_text += f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.\n\n"
+            if per < 15.0: f_lines.append(f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.")
+            elif per > 30.0: f_lines.append(f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.")
+            else: f_lines.append(f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.")
             
-    comments['FUNDAMENTAL'] = f_text if f_text else "해당 종목의 재무 데이터를 불러올 수 없습니다. (ETF 또는 스팩주 등)"
+    # 완성된 리스트를 줄바꿈 두 번(\n\n)으로 깔끔하게 연결 (들여쓰기 원천 차단)
+    comments['FUNDAMENTAL'] = "\n\n".join(f_lines) if f_lines else "해당 종목의 재무 데이터를 불러올 수 없습니다. (ETF 또는 스팩주 등)"
 
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
     t_buy = close * 0.95
@@ -299,7 +301,6 @@ if target_query:
             st.write(f"**[OBV]** {comments.get('OBV', '데이터 없음')}")
             st.write(f"**[ATR]** {comments.get('ATR', '데이터 없음')}")
 
-        # 🌟 UI 개선: 차트 모바일 터치 최적화
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
         chart_df = df.tail(120 if "단기" in analyze_mode else 250)
         
@@ -308,21 +309,17 @@ if target_query:
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name='20일선', line=dict(color='orange')))
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name='60일선', line=dict(color='green')))
             
-            # 레이아웃 터치 속성 잠금
             fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(t=0, b=0, l=0, r=0), dragmode=False)
             fig.update_xaxes(fixedrange=True)
             fig.update_yaxes(fixedrange=True)
             
-            # config={'displayModeBar': False} 로 툴바 숨김 적용
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
             
         with tab2:
             obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
             
-            # 레이아웃 터치 속성 잠금
             obv_fig.update_layout(height=400, title="누적 수급(OBV) 에너지", margin=dict(t=40, b=0, l=0, r=0), dragmode=False)
             obv_fig.update_xaxes(fixedrange=True)
             obv_fig.update_yaxes(fixedrange=True)
             
-            # config={'displayModeBar': False} 로 툴바 숨김 적용
             st.plotly_chart(obv_fig, use_container_width=True, config={'displayModeBar': False})
