@@ -43,7 +43,6 @@ def parse_query(query):
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
-        # 한국 주식 (네이버 금융 크롤링 - 동일업종 PER 추가)
         if ticker.endswith('.KS') or ticker.endswith('.KQ'):
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
@@ -54,8 +53,6 @@ def get_fundamentals(ticker):
             per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
             pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
             div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
-            
-            # 🌟 신규: 미시적 산업군 기준이 되는 '동일업종 PER' 크롤링
             peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
             
             per = float(per_match.group(1).replace(',', '')) if per_match else None
@@ -66,7 +63,6 @@ def get_fundamentals(ticker):
             sector = yf.Ticker(ticker).info.get('sector', 'KOR Equity')
             return per, pbr, sector, div_yield, peer_per
             
-        # 해외 주식 (yfinance)
         else:
             info = yf.Ticker(ticker).info
             per = info.get('trailingPE') or info.get('forwardPE')
@@ -74,9 +70,7 @@ def get_fundamentals(ticker):
             sector = info.get('sector', '알 수 없음')
             div_yield = info.get('dividendYield')
             if div_yield: div_yield = round(div_yield * 100, 2)
-            
-            # 야후파이낸스는 직접적인 피어그룹 PER이 없으므로 산업 평균 추정치를 사용 (기본 20)
-            peer_per = info.get('trailingPE') # 해외주식은 일단 자체 데이터 유지
+            peer_per = info.get('trailingPE') 
             return per, pbr, sector, div_yield, None
     except:
         return None, None, '알 수 없음', None, None
@@ -111,7 +105,6 @@ def calculate_indicators(df):
     
     return df
 
-# 🌟 퀀트 스코어 계산 (0-100점)
 def calculate_quant_score(df):
     latest = df.iloc[-1]
     score = 0
@@ -125,7 +118,6 @@ def calculate_quant_score(df):
         if latest['OBV'] > df['OBV'].iloc[-5]: score += 40
     return score
 
-# 🌟 캔들 패턴 및 지지/저항 탐지
 def detect_patterns_and_levels(df):
     latest = df.iloc[-1]
     patterns = []
@@ -171,7 +163,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
 
     comments = {}
     
-    # 기술적 분석 코멘트
     if pd.isna(rsi): comments['RSI'] = "데이터 부족으로 RSI를 계산할 수 없습니다."
     elif rsi >= 70: comments['RSI'] = "🔥 **과매수 (Overbought)**: 단기 과열 구간입니다. 신규 진입은 자제하세요."
     elif 30 < rsi < 45: comments['RSI'] = "📉 **약세 국면**: 매도세가 우세합니다. 바닥 확인이 필요합니다."
@@ -198,37 +189,27 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
-    # 🌟 펀더멘털 평가: '동일업종 평균 PER' 기반의 실전 비교 로직
     f_text = ""
-    
-    # PBR은 산업별로 허용치가 다르므로 유연하게 적용
     if pbr is not None:
         pbr_threshold = 2.0 if any(s in str(sector).lower() for s in ['technology', 'healthcare', 'software', 'bio']) else 1.2
         if pbr < pbr_threshold * 0.8: f_text += f"✅ **PBR({pbr:.2f})**: 자산 가치 대비 **저평가** 매력이 있습니다.\n\n"
         elif pbr > pbr_threshold * 1.5: f_text += f"⚠️ **PBR({pbr:.2f})**: 장부 가치 대비 **고평가** 프리미엄이 상당합니다.\n\n"
         else: f_text += f"➖ **PBR({pbr:.2f})**: 자산 가치 대비 적정 수준입니다.\n\n"
         
-    # PER은 네이버의 '동일업종 PER'과 직접 맞대결
     if per is not None:
         if per < 0: 
             f_text += f"🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.\n\n"
         elif peer_per is not None and peer_per > 0:
-            # 동일업종 데이터가 성공적으로 긁어와진 경우
-            if per < peer_per * 0.8: 
-                f_text += f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)\n\n"
-            elif per > peer_per * 1.2: 
-                f_text += f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.\n\n"
-            else: 
-                f_text += f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.\n\n"
+            if per < peer_per * 0.8: f_text += f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)\n\n"
+            elif per > peer_per * 1.2: f_text += f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.\n\n"
+            else: f_text += f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.\n\n"
         else:
-            # 해외주식 등 동일업종 데이터가 없는 경우 (기존 로직 사용)
             if per < 15.0: f_text += f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.\n\n"
             elif per > 30.0: f_text += f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.\n\n"
             else: f_text += f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.\n\n"
             
     comments['FUNDAMENTAL'] = f_text if f_text else "해당 종목의 재무 데이터를 불러올 수 없습니다. (ETF 또는 스팩주 등)"
 
-    # 종합 시그널
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
     t_buy = close * 0.95
     t_sell = close * 1.05
@@ -296,7 +277,6 @@ if target_query:
         with col1:
             with st.container(border=True):
                 st.markdown("### 🏢 **기업 기초 체력**")
-                # 화면에 동일업종 평균 PER을 함께 표기해 줍니다.
                 peer_display = f" (업종평균: {peer_per}배)" if peer_per else ""
                 st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배 | **배당:** {div_yield}%")
                 st.info(comments.get('FUNDAMENTAL', '데이터 없음'))
@@ -313,22 +293,36 @@ if target_query:
             st.write(f"📍 **발견된 패턴:** {p_text}")
             st.write(f"🛡️ **심리적 지지선:** {sup:,.0f} | 🚧 **강력 저항선:** {res:,.0f}")
 
-        # 기본적으로 오픈되어 있도록 expanded=True 유지
         with st.expander("🔬 기술적 지표 상세 분석 보기", expanded=True):
             st.write(f"**[RSI]** {comments.get('RSI', '데이터 없음')}")
             st.write(f"**[MACD]** {comments.get('MACD', '데이터 없음')}")
             st.write(f"**[OBV]** {comments.get('OBV', '데이터 없음')}")
             st.write(f"**[ATR]** {comments.get('ATR', '데이터 없음')}")
 
+        # 🌟 UI 개선: 차트 모바일 터치 최적화
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
         chart_df = df.tail(120 if "단기" in analyze_mode else 250)
+        
         with tab1:
             fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name='20일선', line=dict(color='orange')))
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name='60일선', line=dict(color='green')))
-            fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(t=0))
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # 레이아웃 터치 속성 잠금
+            fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(t=0, b=0, l=0, r=0), dragmode=False)
+            fig.update_xaxes(fixedrange=True)
+            fig.update_yaxes(fixedrange=True)
+            
+            # config={'displayModeBar': False} 로 툴바 숨김 적용
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            
         with tab2:
             obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-            obv_fig.update_layout(height=400, title="누적 수급(OBV) 에너지", margin=dict(t=40))
-            st.plotly_chart(obv_fig, use_container_width=True)
+            
+            # 레이아웃 터치 속성 잠금
+            obv_fig.update_layout(height=400, title="누적 수급(OBV) 에너지", margin=dict(t=40, b=0, l=0, r=0), dragmode=False)
+            obv_fig.update_xaxes(fixedrange=True)
+            obv_fig.update_yaxes(fixedrange=True)
+            
+            # config={'displayModeBar': False} 로 툴바 숨김 적용
+            st.plotly_chart(obv_fig, use_container_width=True, config={'displayModeBar': False})
