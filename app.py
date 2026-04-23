@@ -13,7 +13,7 @@ import re
 st.set_page_config(page_title="실시간 매수매도분석기", layout="wide")
 
 st.title("📈 실시간 매수매도분석기")
-st.markdown("기술적 분석, 퀀트 스코어링, 펀더멘털 진단을 통합하여 최적의 매매 타이밍을 제시합니다.")
+st.markdown("기술적 분석, 퀀트 스코어링, 펀더멘털 진단(동일업종 비교)을 통합하여 최적의 매매 타이밍을 제시합니다.")
 st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
@@ -43,6 +43,7 @@ def parse_query(query):
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
+        # 한국 주식 (네이버 금융 크롤링 - 동일업종 PER 추가)
         if ticker.endswith('.KS') or ticker.endswith('.KQ'):
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
@@ -54,12 +55,18 @@ def get_fundamentals(ticker):
             pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
             div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
             
+            # 🌟 신규: 미시적 산업군 기준이 되는 '동일업종 PER' 크롤링
+            peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
+            
             per = float(per_match.group(1).replace(',', '')) if per_match else None
             pbr = float(pbr_match.group(1).replace(',', '')) if pbr_match else None
             div_yield = float(div_match.group(1).replace(',', '')) if div_match else None
+            peer_per = float(peer_per_match.group(1).replace(',', '')) if peer_per_match else None
             
             sector = yf.Ticker(ticker).info.get('sector', 'KOR Equity')
-            return per, pbr, sector, div_yield
+            return per, pbr, sector, div_yield, peer_per
+            
+        # 해외 주식 (yfinance)
         else:
             info = yf.Ticker(ticker).info
             per = info.get('trailingPE') or info.get('forwardPE')
@@ -67,9 +74,12 @@ def get_fundamentals(ticker):
             sector = info.get('sector', '알 수 없음')
             div_yield = info.get('dividendYield')
             if div_yield: div_yield = round(div_yield * 100, 2)
-            return per, pbr, sector, div_yield
+            
+            # 야후파이낸스는 직접적인 피어그룹 PER이 없으므로 산업 평균 추정치를 사용 (기본 20)
+            peer_per = info.get('trailingPE') # 해외주식은 일단 자체 데이터 유지
+            return per, pbr, sector, div_yield, None
     except:
-        return None, None, '알 수 없음', None
+        return None, None, '알 수 없음', None, None
 
 def calculate_indicators(df):
     close = df['Close'].squeeze()
@@ -144,7 +154,7 @@ def get_stock_data(ticker, mode):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-def generate_signal_and_comments(df, mode, per, pbr, sector):
+def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
     latest, prev = df.iloc[-1], df.iloc[-2]
     close, rsi = float(latest['Close']), float(latest['RSI'])
     macd_curr, sig_curr = float(latest['MACD']), float(latest['Signal'])
@@ -188,43 +198,38 @@ def generate_signal_and_comments(df, mode, per, pbr, sector):
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
-    # 🌟 펀더멘털 평가: 산업군별(Sector) 맞춤형 기준치 적용
-    # 기본값 (제조업 평균)
-    per_low, per_high = 10.0, 15.0
-    pbr_low, pbr_high = 1.0, 1.5
-    
-    sector_str = str(sector).lower()
-    
-    # 1. 기술/바이오/소프트웨어 (고성장 산업: 프리미엄 허용)
-    if any(s in sector_str for s in ['technology', 'healthcare', 'software', 'bio']):
-        per_low, per_high = 20.0, 35.0
-        pbr_low, pbr_high = 2.0, 4.0
-    # 2. 금융/은행/지주사 (저성장/가치주: 엄격한 기준)
-    elif any(s in sector_str for s in ['financial', 'bank', 'insurance']):
-        per_low, per_high = 5.0, 10.0
-        pbr_low, pbr_high = 0.5, 0.8
-    # 3. 유틸리티/에너지/통신 (배당/안정성 위주)
-    elif any(s in sector_str for s in ['utilities', 'energy', 'communication']):
-        per_low, per_high = 8.0, 12.0
-        pbr_low, pbr_high = 0.8, 1.2
-
+    # 🌟 펀더멘털 평가: '동일업종 평균 PER' 기반의 실전 비교 로직
     f_text = ""
+    
+    # PBR은 산업별로 허용치가 다르므로 유연하게 적용
     if pbr is not None:
-        if pbr < pbr_low: f_text += f"✅ **PBR({pbr:.2f})**: 동종 산업 대비 **매력적인 저평가** 상태입니다. (산업 적정선: {pbr_low}배 수준)\n\n"
-        elif pbr > pbr_high: f_text += f"⚠️ **PBR({pbr:.2f})**: 동종 산업 평균 대비 **고평가** 영역입니다. 강한 성장 모멘텀이 뒷받침되어야 합니다.\n\n"
-        else: f_text += f"➖ **PBR({pbr:.2f})**: 소속 산업군의 적정 자산 가치 수준에서 거래되고 있습니다.\n\n"
+        pbr_threshold = 2.0 if any(s in str(sector).lower() for s in ['technology', 'healthcare', 'software', 'bio']) else 1.2
+        if pbr < pbr_threshold * 0.8: f_text += f"✅ **PBR({pbr:.2f})**: 자산 가치 대비 **저평가** 매력이 있습니다.\n\n"
+        elif pbr > pbr_threshold * 1.5: f_text += f"⚠️ **PBR({pbr:.2f})**: 장부 가치 대비 **고평가** 프리미엄이 상당합니다.\n\n"
+        else: f_text += f"➖ **PBR({pbr:.2f})**: 자산 가치 대비 적정 수준입니다.\n\n"
         
+    # PER은 네이버의 '동일업종 PER'과 직접 맞대결
     if per is not None:
-        if per < 0: f_text += f"🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 턴어라운드(흑자 전환) 모멘텀을 뉴스에서 꼭 확인하세요.\n\n"
-        elif per < per_low: f_text += f"✅ **PER({per:.2f})**: 이익 대비 주가가 동종 산업 내에서 **매우 저평가**되어 있습니다. (산업 적정선: {per_low}~{per_high}배)\n\n"
-        elif per > per_high: f_text += f"🔥 **PER({per:.2f})**: 동종 산업 평균 대비 주가가 **과도한 프리미엄**을 받고 있습니다. 리스크 관리를 권장합니다.\n\n"
-        else: f_text += f"➖ **PER({per:.2f})**: 소속 산업군의 평균적인 수익 가치를 인정받고 있습니다.\n\n"
-        
+        if per < 0: 
+            f_text += f"🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.\n\n"
+        elif peer_per is not None and peer_per > 0:
+            # 동일업종 데이터가 성공적으로 긁어와진 경우
+            if per < peer_per * 0.8: 
+                f_text += f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)\n\n"
+            elif per > peer_per * 1.2: 
+                f_text += f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.\n\n"
+            else: 
+                f_text += f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.\n\n"
+        else:
+            # 해외주식 등 동일업종 데이터가 없는 경우 (기존 로직 사용)
+            if per < 15.0: f_text += f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.\n\n"
+            elif per > 30.0: f_text += f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.\n\n"
+            else: f_text += f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.\n\n"
+            
     comments['FUNDAMENTAL'] = f_text if f_text else "해당 종목의 재무 데이터를 불러올 수 없습니다. (ETF 또는 스팩주 등)"
 
     # 종합 시그널
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
-    
     t_buy = close * 0.95
     t_sell = close * 1.05
     s_loss = close * 0.90
@@ -267,7 +272,7 @@ if target_query:
 
     with st.spinner(f"📡 '{display_name}' 분석 중..."):
         df = get_stock_data(ticker_symbol, analyze_mode)
-        per, pbr, sector, div_yield = get_fundamentals(ticker_symbol)
+        per, pbr, sector, div_yield, peer_per = get_fundamentals(ticker_symbol)
         
     if df.empty:
         st.error("데이터를 찾을 수 없습니다.")
@@ -285,12 +290,15 @@ if target_query:
         st.progress(q_score / 100)
         st.write(f"현재 점수: **{q_score}점** / 100점")
 
-        pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode, per, pbr, sector)
+        pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode, per, pbr, sector, peer_per)
         
         col1, col2 = st.columns(2)
         with col1:
             with st.container(border=True):
                 st.markdown("### 🏢 **기업 기초 체력**")
+                # 화면에 동일업종 평균 PER을 함께 표기해 줍니다.
+                peer_display = f" (업종평균: {peer_per}배)" if peer_per else ""
+                st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배 | **배당:** {div_yield}%")
                 st.info(comments.get('FUNDAMENTAL', '데이터 없음'))
         with col2:
             with st.container(border=True):
@@ -305,7 +313,7 @@ if target_query:
             st.write(f"📍 **발견된 패턴:** {p_text}")
             st.write(f"🛡️ **심리적 지지선:** {sup:,.0f} | 🚧 **강력 저항선:** {res:,.0f}")
 
-        # 🌟 UI 개선: expander를 기본적으로 펼쳐두기 (expanded=True)
+        # 기본적으로 오픈되어 있도록 expanded=True 유지
         with st.expander("🔬 기술적 지표 상세 분석 보기", expanded=True):
             st.write(f"**[RSI]** {comments.get('RSI', '데이터 없음')}")
             st.write(f"**[MACD]** {comments.get('MACD', '데이터 없음')}")
