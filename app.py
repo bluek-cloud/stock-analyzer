@@ -13,7 +13,7 @@ import re
 st.set_page_config(page_title="실시간 매수매도분석기", layout="wide")
 
 st.title("📈 실시간 매수매도분석기")
-st.markdown("기술적 분석, 퀀트 스코어링, 펀더멘털 진단(동일업종 비교)을 통합하여 최적의 매매 타이밍을 제시합니다.")
+st.markdown("기술적 분석, 퀀트 스코어링, 펀더멘털 진단(동일업종 비교, ROE/부채비율)을 통합하여 최적의 매매 타이밍을 제시합니다.")
 st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
@@ -43,6 +43,18 @@ def parse_query(query):
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
+        # 야후 파이낸스 공통 정보 (해외 주식 및 KRX 보조 데이터용)
+        info = yf.Ticker(ticker).info
+        sector = info.get('sector', 'KOR Equity')
+        
+        # 신규: ROE 및 부채비율 추출
+        roe = info.get('returnOnEquity')
+        if roe is not None: roe = round(roe * 100, 2)
+        
+        debt_ratio = info.get('debtToEquity')
+        if debt_ratio is not None: debt_ratio = round(debt_ratio, 2)
+        
+        # 한국 주식 (네이버 금융 크롤링 - 동일업종 PER 등)
         if ticker.endswith('.KS') or ticker.endswith('.KQ'):
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
@@ -60,20 +72,19 @@ def get_fundamentals(ticker):
             div_yield = float(div_match.group(1).replace(',', '')) if div_match else None
             peer_per = float(peer_per_match.group(1).replace(',', '')) if peer_per_match else None
             
-            sector = yf.Ticker(ticker).info.get('sector', 'KOR Equity')
-            return per, pbr, sector, div_yield, peer_per
+            return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
             
+        # 해외 주식
         else:
-            info = yf.Ticker(ticker).info
             per = info.get('trailingPE') or info.get('forwardPE')
             pbr = info.get('priceToBook')
-            sector = info.get('sector', '알 수 없음')
             div_yield = info.get('dividendYield')
             if div_yield: div_yield = round(div_yield * 100, 2)
             peer_per = info.get('trailingPE') 
-            return per, pbr, sector, div_yield, None
+            
+            return per, pbr, sector, div_yield, None, roe, debt_ratio
     except:
-        return None, None, '알 수 없음', None, None
+        return None, None, '알 수 없음', None, None, None, None
 
 def calculate_indicators(df):
     close = df['Close'].squeeze()
@@ -146,7 +157,7 @@ def get_stock_data(ticker, mode):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
+def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt_ratio):
     latest, prev = df.iloc[-1], df.iloc[-2]
     close, rsi = float(latest['Close']), float(latest['RSI'])
     macd_curr, sig_curr = float(latest['MACD']), float(latest['Signal'])
@@ -189,14 +200,16 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
-    # 🌟 들여쓰기 버그 수정: 문자열을 결합하지 않고 리스트에 모은 후 한 번에 합침
     f_lines = []
+    
+    # PBR 평가
     if pbr is not None:
         pbr_threshold = 2.0 if any(s in str(sector).lower() for s in ['technology', 'healthcare', 'software', 'bio']) else 1.2
         if pbr < pbr_threshold * 0.8: f_lines.append(f"✅ **PBR({pbr:.2f})**: 자산 가치 대비 **저평가** 매력이 있습니다.")
         elif pbr > pbr_threshold * 1.5: f_lines.append(f"⚠️ **PBR({pbr:.2f})**: 장부 가치 대비 **고평가** 프리미엄이 상당합니다.")
         else: f_lines.append(f"➖ **PBR({pbr:.2f})**: 자산 가치 대비 적정 수준입니다.")
         
+    # PER 평가
     if per is not None:
         if per < 0: 
             f_lines.append("🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.")
@@ -209,7 +222,22 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per):
             elif per > 30.0: f_lines.append(f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.")
             else: f_lines.append(f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.")
             
-    # 완성된 리스트를 줄바꿈 두 번(\n\n)으로 깔끔하게 연결 (들여쓰기 원천 차단)
+    # 🌟 신규: ROE 평가
+    if roe is not None:
+        if roe >= 15.0: f_lines.append(f"🏅 **ROE({roe:.2f}%)**: 워런 버핏의 기준(15%)을 통과한 **초우량 수익성**입니다. 돈을 매우 잘 버는 기업입니다.")
+        elif roe >= 8.0: f_lines.append(f"✅ **ROE({roe:.2f}%)**: 안정적이고 양호한 수익성을 보여주고 있습니다.")
+        elif roe > 0: f_lines.append(f"⚠️ **ROE({roe:.2f}%)**: 수익성이 다소 낮은 편입니다. 자본 효율성 개선이 필요합니다.")
+        else: f_lines.append(f"🚨 **ROE({roe:.2f}%)**: 자본 대비 수익이 마이너스(적자) 상태입니다.")
+        
+    # 🌟 신규: 부채비율 평가
+    if debt_ratio is not None:
+        if any(s in str(sector).lower() for s in ['financial', 'bank', 'insurance']):
+            f_lines.append(f"🏦 **부채비율({debt_ratio:.2f}%)**: 금융업종 특성상 레버리지(부채)를 활용하는 정상적인 비즈니스 구조입니다.")
+        else:
+            if debt_ratio <= 100.0: f_lines.append(f"🛡️ **부채비율({debt_ratio:.2f}%)**: 빚이 적고 재무가 **매우 건전**합니다. 금리 인상기에도 끄떡없습니다.")
+            elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
+            else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 부채비율이 200%를 초과하여 **재무 리스크**가 존재합니다. 이자 부담을 확인하세요.")
+
     comments['FUNDAMENTAL'] = "\n\n".join(f_lines) if f_lines else "해당 종목의 재무 데이터를 불러올 수 없습니다. (ETF 또는 스팩주 등)"
 
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
@@ -255,7 +283,7 @@ if target_query:
 
     with st.spinner(f"📡 '{display_name}' 분석 중..."):
         df = get_stock_data(ticker_symbol, analyze_mode)
-        per, pbr, sector, div_yield, peer_per = get_fundamentals(ticker_symbol)
+        per, pbr, sector, div_yield, peer_per, roe, debt_ratio = get_fundamentals(ticker_symbol)
         
     if df.empty:
         st.error("데이터를 찾을 수 없습니다.")
@@ -273,14 +301,19 @@ if target_query:
         st.progress(q_score / 100)
         st.write(f"현재 점수: **{q_score}점** / 100점")
 
-        pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode, per, pbr, sector, peer_per)
+        pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode, per, pbr, sector, peer_per, roe, debt_ratio)
         
         col1, col2 = st.columns(2)
         with col1:
             with st.container(border=True):
                 st.markdown("### 🏢 **기업 기초 체력**")
                 peer_display = f" (업종평균: {peer_per}배)" if peer_per else ""
-                st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배 | **배당:** {div_yield}%")
+                
+                # 🌟 요약 정보란에 ROE와 부채비율 데이터 추가
+                roe_str = f"{roe}%" if roe is not None else "N/A"
+                debt_str = f"{debt_ratio}%" if debt_ratio is not None else "N/A"
+                st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배<br>**ROE:** {roe_str} | **부채비율:** {debt_str} | **배당:** {div_yield}%", unsafe_allow_html=True)
+                
                 st.info(comments.get('FUNDAMENTAL', '데이터 없음'))
         with col2:
             with st.container(border=True):
