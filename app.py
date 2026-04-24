@@ -107,19 +107,37 @@ def calculate_indicators(df):
     df['ATR'] = tr.rolling(window=14).mean()
     df['OBV'] = (vol * (close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0)))).cumsum()
     
+    # 🌟 신규: 5일 평균 거래량 대비 당일 거래량 비율 계산 (상대 거래량)
+    df['Vol_MA5'] = vol.rolling(window=5).mean()
+    df['Vol_Ratio'] = (vol / df['Vol_MA5']) * 100
+    
     return df
 
 def calculate_quant_score(df):
+    if len(df) < 5: return 0
     latest = df.iloc[-1]
+    prev = df.iloc[-2]
     score = 0
+    
+    # RSI (25점 배점)
     if not pd.isna(latest['RSI']):
-        if latest['RSI'] < 30: score += 30
-        elif latest['RSI'] < 50: score += 20
-        elif latest['RSI'] < 70: score += 10
+        if latest['RSI'] < 30: score += 25
+        elif latest['RSI'] < 50: score += 15
+        elif latest['RSI'] < 70: score += 5
+        
+    # MACD (25점 배점)
     if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
-        if latest['MACD'] > latest['Signal']: score += 30
-    if len(df) >= 5 and not pd.isna(latest['OBV']):
-        if latest['OBV'] > df['OBV'].iloc[-5]: score += 40
+        if latest['MACD'] > latest['Signal']: score += 25
+        
+    # OBV (30점 배점)
+    if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: 
+        score += 30
+        
+    # 🌟 신규 가중치: 거래량 폭발 (20점 배점 - 주가 상승 동반 시)
+    if not pd.isna(latest['Vol_Ratio']):
+        if latest['Vol_Ratio'] >= 150 and latest['Close'] > prev['Close']:
+            score += 20
+            
     return score
 
 def detect_patterns_and_levels(df):
@@ -158,6 +176,7 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     macd_curr, sig_curr = float(latest['MACD']), float(latest['Signal'])
     macd_prev, sig_prev = float(prev['MACD']), float(prev['Signal'])
     atr, obv = float(latest['ATR']), float(latest['OBV'])
+    vol_ratio = float(latest['Vol_Ratio'])
     
     ma20 = float(latest['MA20'])
     ma200 = float(latest['MA200']) if not pd.isna(latest['MA200']) else close
@@ -186,8 +205,15 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         obv_change = obv - prev20_obv
         if price_change <= 0 and obv_change > 0: comments['OBV'] = "🕵️‍♂️ **숨은 매집**: 주가는 하락/횡보하지만 수급(OBV)은 증가 중입니다. 상승 전조일 수 있습니다."
         elif price_change > 0 and obv_change < 0: comments['OBV'] = "🚨 **이탈 징후**: 주가는 오르는데 거래량은 빠지고 있습니다. '가짜 상승'을 주의하세요."
-        elif obv_change > 0: comments['OBV'] = "💪 **건강한 상승**: 매수 거래량이 탄탄하게 유입되며 추세를 뒷받침합니다."
+        elif obv_change > 0: comments['OBV'] = "💪 **건강한 상승**: 주가와 매수 거래량이 동반 상승하며 추세를 뒷받침합니다."
         else: comments['OBV'] = "🍂 **수급 악화**: 매도 거래량이 압도하며 자금이 이탈하고 있습니다."
+
+    # 🌟 신규: 상대 거래량 코멘트
+    if pd.isna(vol_ratio): comments['VOL'] = "거래량 데이터를 계산할 수 없습니다."
+    elif vol_ratio >= 200: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 5일 평균 대비 거래량이 2배 이상 터졌습니다! 세력 개입이나 강력한 변곡점일 가능성이 높습니다."
+    elif vol_ratio >= 120: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
+    elif vol_ratio >= 80: comments['VOL'] = f"➖ **평균 수준 ({vol_ratio:.0f}%)**: 평소와 비슷한 수준의 무난한 거래가 이루어지고 있습니다."
+    else: comments['VOL'] = f"💤 **소외/관망 ({vol_ratio:.0f}%)**: 거래량이 말라붙었습니다. 에너지를 응축 중이거나 시장의 관심에서 멀어져 있습니다."
 
     if pd.isna(atr) or pd.isna(close) or close == 0:
         comments['ATR'] = "변동성 데이터를 계산할 수 없습니다."
@@ -195,7 +221,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
-    # 🌟 들여쓰기 버그 완전 차단: 리스트로 반환하여 UI에서 개별 출력
     f_lines = []
     
     if pbr is not None:
@@ -230,7 +255,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
             elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
             else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 부채비율이 200%를 초과하여 **재무 리스크**가 존재합니다.")
 
-    # 문자열 병합 제거 -> 리스트 형태로 반환
     comments['FUNDAMENTAL'] = f_lines if f_lines else ["해당 종목의 재무 데이터를 불러올 수 없습니다."]
 
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
@@ -305,8 +329,7 @@ if target_query:
                 debt_str = f"{debt_ratio}%" if debt_ratio is not None else "N/A"
                 st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배<br>**ROE:** {roe_str} | **부채비율:** {debt_str} | **배당:** {div_yield}%", unsafe_allow_html=True)
                 
-                st.markdown("---") # 구분선 추가
-                # 🌟 에러 방지: 각 문장을 별도의 마크다운으로 출력하여 들여쓰기 원천 차단
+                st.markdown("---")
                 for fund_line in comments.get('FUNDAMENTAL', []):
                     st.markdown(fund_line)
                 
@@ -324,10 +347,11 @@ if target_query:
             st.write(f"🛡️ **심리적 지지선:** {sup:,.0f} | 🚧 **강력 저항선:** {res:,.0f}")
 
         with st.expander("🔬 기술적 지표 상세 분석 보기", expanded=True):
-            st.markdown(f"**[RSI]** {comments.get('RSI', '데이터 없음')}")
-            st.markdown(f"**[MACD]** {comments.get('MACD', '데이터 없음')}")
-            st.markdown(f"**[OBV]** {comments.get('OBV', '데이터 없음')}")
-            st.markdown(f"**[ATR]** {comments.get('ATR', '데이터 없음')}")
+            st.markdown(f"**[상대 거래량]** {comments.get('VOL', '데이터 없음')}")
+            st.markdown(f"**[OBV 누적]** {comments.get('OBV', '데이터 없음')}")
+            st.markdown(f"**[RSI 강도]** {comments.get('RSI', '데이터 없음')}")
+            st.markdown(f"**[MACD 흐름]** {comments.get('MACD', '데이터 없음')}")
+            st.markdown(f"**[ATR 변동성]** {comments.get('ATR', '데이터 없음')}")
 
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
         chart_df = df.tail(120 if "단기" in analyze_mode else 250)
