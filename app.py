@@ -1,14 +1,13 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
 import requests
 import re
 
 # ==========================================
-# 1. 페이지 설정 및 제목 (고정)
+# 1. 페이지 설정 및 제목
 # ==========================================
 st.set_page_config(page_title="실시간 매수매도분석기", layout="wide")
 
@@ -124,6 +123,8 @@ def calculate_quant_score(df):
     return score
 
 def detect_patterns_and_levels(df):
+    if len(df) < 60: return [], 0, 0
+    
     latest = df.iloc[-1]
     patterns = []
     body = abs(latest['Open'] - latest['Close'])
@@ -132,7 +133,7 @@ def detect_patterns_and_levels(df):
     
     if lower_shadow > body * 2 and upper_shadow < body:
         patterns.append("🔨 망치형 (바닥권 반등 신호)")
-    if len(df) >= 2 and latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]:
+    if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]:
         patterns.append("🚀 상승 장악형 (추세 전환)")
         
     support = df['Low'].tail(60).min()
@@ -194,6 +195,7 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         volatility_pct = (atr / close) * 100
         comments['ATR'] = f"현재 일평균 변동성은 {volatility_pct:.1f}% 수준입니다."
 
+    # 🌟 들여쓰기 버그 완전 차단: 리스트로 반환하여 UI에서 개별 출력
     f_lines = []
     
     if pbr is not None:
@@ -228,7 +230,8 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
             elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
             else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 부채비율이 200%를 초과하여 **재무 리스크**가 존재합니다.")
 
-    comments['FUNDAMENTAL'] = "\n\n".join(f_lines) if f_lines else "해당 종목의 재무 데이터를 불러올 수 없습니다."
+    # 문자열 병합 제거 -> 리스트 형태로 반환
+    comments['FUNDAMENTAL'] = f_lines if f_lines else ["해당 종목의 재무 데이터를 불러올 수 없습니다."]
 
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
     t_buy = close * 0.95
@@ -302,7 +305,10 @@ if target_query:
                 debt_str = f"{debt_ratio}%" if debt_ratio is not None else "N/A"
                 st.markdown(f"**업종:** {sector} | **PER:** {per}배{peer_display} | **PBR:** {pbr}배<br>**ROE:** {roe_str} | **부채비율:** {debt_str} | **배당:** {div_yield}%", unsafe_allow_html=True)
                 
-                st.info(comments.get('FUNDAMENTAL', '데이터 없음'))
+                st.markdown("---") # 구분선 추가
+                # 🌟 에러 방지: 각 문장을 별도의 마크다운으로 출력하여 들여쓰기 원천 차단
+                for fund_line in comments.get('FUNDAMENTAL', []):
+                    st.markdown(fund_line)
                 
         with col2:
             with st.container(border=True):
@@ -318,10 +324,10 @@ if target_query:
             st.write(f"🛡️ **심리적 지지선:** {sup:,.0f} | 🚧 **강력 저항선:** {res:,.0f}")
 
         with st.expander("🔬 기술적 지표 상세 분석 보기", expanded=True):
-            st.write(f"**[RSI]** {comments.get('RSI', '데이터 없음')}")
-            st.write(f"**[MACD]** {comments.get('MACD', '데이터 없음')}")
-            st.write(f"**[OBV]** {comments.get('OBV', '데이터 없음')}")
-            st.write(f"**[ATR]** {comments.get('ATR', '데이터 없음')}")
+            st.markdown(f"**[RSI]** {comments.get('RSI', '데이터 없음')}")
+            st.markdown(f"**[MACD]** {comments.get('MACD', '데이터 없음')}")
+            st.markdown(f"**[OBV]** {comments.get('OBV', '데이터 없음')}")
+            st.markdown(f"**[ATR]** {comments.get('ATR', '데이터 없음')}")
 
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
         chart_df = df.tail(120 if "단기" in analyze_mode else 250)
