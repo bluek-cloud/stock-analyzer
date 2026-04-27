@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import random
 
 # ==========================================
-# 1. 페이지 설정 및 제목 (모바일 최적화)
+# 1. 페이지 설정 및 제목
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
@@ -49,8 +49,7 @@ def parse_query(query):
     if query.isdigit() and len(query) == 6:
         matched = krx_df[krx_df['Code'] == query]
         if not matched.empty:
-            name = matched.iloc[0]['Name']
-            return f"{name} ({query})", query, query, "원", 0
+            return f"{matched.iloc[0]['Name']} ({query})", query, query, "원", 0
     matched = krx_df[krx_df['Name'] == query]
     if not matched.empty:
         code = matched.iloc[0]['Code']
@@ -106,8 +105,11 @@ def detect_patterns_and_levels(df):
     body = abs(latest['Open'] - latest['Close'])
     lower_shadow = min(latest['Open'], latest['Close']) - latest['Low']
     upper_shadow = latest['High'] - max(latest['Open'], latest['Close'])
+    
     if lower_shadow > body * 2 and upper_shadow < body: patterns.append("🔨 망치형 (바닥권 반등 신호)")
     if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
+    
+    # 전달받은 df의 타임프레임(일봉/주봉)에 완벽히 동기화된 지지/저항
     support = df['Low'].tail(60).min()
     resistance = df['High'].tail(60).max()
     return patterns, support, resistance
@@ -119,22 +121,12 @@ def get_stock_data(code):
         df = fdr.DataReader(code, start=start_date)
         if df.empty: return pd.DataFrame()
         if df.index.tz is not None: df.index = df.index.tz_localize(None)
-        return calculate_indicators(df)
+        return df # 지표 계산은 분기 처리 이후로 이동 (최적화)
     except: return pd.DataFrame()
 
-# 🌟 수정: 단기/장기 모두 상세 수치를 포함한 정밀 분석 로직
-def generate_signal_and_comments(df, sup, res, currency, decimals, mode):
-    is_short_term = "단기" in mode
-    # 장기 모드일 경우 주봉으로 변환하여 지표 재계산
-    if not is_short_term:
-        working_df = df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).copy()
-        working_df = calculate_indicators(working_df)
-        time_unit = "주"
-    else:
-        working_df = df.copy()
-        time_unit = "일"
-
-    latest = working_df.iloc[-1]
+# 🌟 고도화: 분석용 메인 함수 (df 자체가 이미 완벽한 일봉/주봉으로 세팅되어 들어옴)
+def generate_signal_and_comments(df, sup, res, currency, decimals, is_short_term, time_unit):
+    latest = df.iloc[-1]
     close = float(latest['Close'])
     rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else 50
     macd = float(latest['MACD']) if not pd.isna(latest['MACD']) else 0
@@ -143,62 +135,57 @@ def generate_signal_and_comments(df, sup, res, currency, decimals, mode):
     atr = float(latest['ATR']) if not pd.isna(latest['ATR']) else 0
     obv = float(latest['OBV']) if not pd.isna(latest['OBV']) else 0
     
-    prev_lookback = 20 if len(working_df) >= 20 else len(working_df)-1
-    prev_close = float(working_df['Close'].iloc[-prev_lookback])
-    prev_obv = float(working_df['OBV'].iloc[-prev_lookback])
-    prev_rsi = float(working_df['RSI'].iloc[-prev_lookback])
+    # Index Error 방지를 위한 동적 룩백 설정
+    prev_lookback = min(20, len(df) - 1) if len(df) > 1 else 1
+    prev_close = float(df['Close'].iloc[-prev_lookback])
+    prev_obv = float(df['OBV'].iloc[-prev_lookback])
+    prev_rsi = float(df['RSI'].iloc[-prev_lookback]) if not pd.isna(df['RSI'].iloc[-prev_lookback]) else 50
+    
+    recent_obv_lookback = min(5, len(df) - 1) if len(df) > 1 else 1
+    prev_recent_obv = float(df['OBV'].iloc[-recent_obv_lookback])
 
     comments = {}
     
-    # RSI 상세 분석
-    if rsi >= 70: 
-        comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 지수가 70을 초과한 강력한 과열 구간입니다. 추가 상승보다는 차익 매물 출회에 따른 단기 조정에 대비해야 합니다."
-    elif rsi <= 30:
-        comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하인 극도의 침체 구간입니다. 매도세가 소진되어 기술적 반등이 임박한 '공포에 사는 구간'입니다."
-    else:
-        comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 중립적인 흐름입니다. 현재가 근처에서 매수/매도 공방이 치열하며 새로운 추세 형성을 대기 중입니다."
+    # 지표 상세 코멘트 동적 생성
+    comments['RSI'] = f"RSI: {rsi:.1f} (안정)" if 30 < rsi < 70 else (f"🔥 과매수 ({rsi:.1f})" if rsi >= 70 else f"❄️ 과매도 ({rsi:.1f})")
+    comments['MACD'] = "🚀 상승 추세" if macd > signal else "⚠️ 하락 추세"
+    comments['VOL'] = f"🌋 상대 거래량 {vol_ratio:.0f}%" if vol_ratio > 150 else f"➖ 보통 거래량 {vol_ratio:.0f}%"
+    comments['ATR'] = f"{time_unit}평균 변동폭: {atr:,.{decimals}f}{currency}"
+    comments['OBV'] = f"🕵️‍♂️ 매집 확인: 최근 5{time_unit}간 누적 OBV가 {'개선' if obv > prev_recent_obv else '악화'} 중입니다."
 
-    # MACD 상세 분석
-    macd_diff = macd - signal
-    if macd > signal:
-        comments['MACD'] = f"🚀 **상승 추세 (차이: {macd_diff:,.{decimals}f})**: MACD가 시그널선을 상향 돌파하여 유지 중입니다. 긍정적인 모멘텀이 강화되는 시점입니다."
-    else:
-        comments['MACD'] = f"⚠️ **하락 추세 (차이: {macd_diff:,.{decimals}f})**: MACD가 시그널선 아래에 위치합니다. 단기적인 하방 압력이 우세하여 보수적인 접근이 필요합니다."
-
-    # 거래량 및 수급 상세 분석
-    obv_change = obv - prev_obv
-    comments['VOL'] = f"🌋 **상대 거래량 {vol_ratio:.0f}%**: 최근 5{time_unit} 평균 대비 유의미한 거래 에너지가 실리고 있습니다. 추세 변화의 강력한 신호입니다." if vol_ratio > 150 else f"➖ **보통 거래량 {vol_ratio:.0f}%**: 평이한 수준의 손바뀜이 일어나고 있으며, 주가는 횡보할 가능성이 큽니다."
-    comments['OBV'] = f"🕵️‍♂️ **수급 흐름**: 최근 {prev_lookback}{time_unit}간 누적 OBV가 {'증가' if obv_change > 0 else '감소'} 중입니다. 이는 세력이 물량을 {'매집' if obv_change > 0 else '이탈'}하고 있다는 증거입니다."
-
-    # ATR 상세 분석
-    volatility_pct = (atr / close) * 100
-    comments['ATR'] = f"현재 {time_unit}평균 변동성은 **{volatility_pct:.1f}% ({atr:,.{decimals}f}{currency})**입니다. 이 범위를 벗어나는 움직임은 추세의 시작으로 봅니다."
-
-    # 최종 전략 논리
+    # 패턴 및 논리 도출
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
     near_sup = dist_to_sup <= 5
+    dist_to_res = (res - close) / res * 100 if res > 0 else 100
+    near_res = dist_to_res <= 5
+
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
-    
+    bearish_div = (close > prev_close) and (obv < prev_obv or rsi < prev_rsi)
+
     if is_short_term:
         position, reason = "⚖️ 단기 관망", "단기 지표의 방향성이 혼재되어 있어 명확한 추세 확인이 필요합니다."
         if (rsi < 40 and macd > signal) or (near_sup and bullish_div):
             position, reason = "🔴 단기 적극 매수", "단기 바닥권에서 수급 개선 시그널(다이버전스)이 명확히 포착되었습니다."
-        elif (rsi > 70 and macd < signal):
-            position, reason = "🔷 단기 적극 매도", "단기 과열 해소 과정에서 추세가 꺾이고 있어 즉각적인 리스크 관리가 필요합니다."
+        elif (rsi > 70 and macd < signal) or bearish_div:
+            position, reason = "🔷 단기 적극 매도", "단기 고점 징후가 뚜렷하며 수급이 이탈하는 현상이 감지되었습니다."
+        elif macd > signal:
+            position, reason = "🟠 단기 분할 매수", "안정적인 단기 우상향 흐름이 이어지고 있습니다."
     else:
         ma60 = latest['MA60'] if not pd.isna(latest['MA60']) else close
-        position, reason = "⚖️ 장기 관망", "거시적인 큰 추세 전환을 확신하기에는 수급 에너지가 아직 부족합니다."
+        position, reason = "⚖️ 장기 관망", "거시적인 큰 추세 전환을 확신하기에는 에너지가 아직 부족합니다."
         if close > ma60 and macd > signal:
             position, reason = "🔴 비중 확대 (장기)", "주봉상 대세 상승장에 진입하여 긴 호흡으로 수익을 극대화하기 최적의 구간입니다."
         elif close < ma60 and rsi < 35:
             position, reason = "🟠 저점 매수 (장기)", "주봉상 역사적 저평가 구간입니다. 단기 등락을 무시하고 분할 매집을 시작할 시점입니다."
         elif rsi > 75:
-            position, reason = "🔷 비중 축소 (장기)", "주봉상 강력한 저항선 및 과열권에 도달했습니다. 일부 수익 실현을 통한 현금 확보를 권장합니다."
+            position, reason = "🔷 비중 축소 (장기)", "주봉상 강력한 저항선 및 과열권에 도달했습니다. 일부 수익 실현을 권장합니다."
 
-    ai_opinion = f"🤖 **StockMap AI {mode} 정밀 분석**\n\n"
+    ai_opinion = f"🤖 **StockMap AI {'단기 스윙' if is_short_term else '장기 가치투자'} 정밀 분석**\n\n"
     div_msg = "💡 **[핵심 패턴 포착]** 가격은 낮아지나 보조지표는 상승하는 '상승 다이버전스'가 발생했습니다. " if bullish_div else ""
-    ai_body = f"현재 이 종목은 {time_unit}봉 기준 {'안정적인 우상향' if macd > signal else '조정 및 하향'} 흐름을 보이고 있습니다. "
+    
+    ai_body = f"현재 이 종목은 {time_unit}봉 기준 {'안정적인 우상향' if macd > signal else '조정 및 하락'} 흐름을 보이고 있습니다. "
     if near_sup: ai_body += f"특히 주요 지지 가격(**{sup:,.{decimals}f}{currency}**)에 인접해 있어 하방 경직성이 기대되는 위치입니다. "
+    elif near_res: ai_body += f"강력한 저항선(**{res:,.{decimals}f}{currency}**)에 근접하여 매물 돌파 여부가 중요한 시점입니다. "
     
     comments['AI'] = f"{ai_opinion}{div_msg}{ai_body}\n\n🎯 **최종 전략:** {reason} 따라서 현재는 **{position}** 포지션을 추천합니다."
     
@@ -216,7 +203,7 @@ with st.sidebar:
     st.markdown(f"""
     <div class="style-box">
     <b>🔍 분석 모드 차이 안내</b><br>
-    • <b>단기</b>: 일봉의 미세한 파동을 포착하여 며칠 내의 '반등 타점'을 잡습니다.<br>
+    • <b>단기</b>: 일봉의 미세한 파동을 포착하여 며칠 내의 '단기 반등 타점'을 잡습니다.<br>
     • <b>장기</b>: <b>주봉 단위</b>의 거대 추세를 분석하여 잔파동을 무시하고 대세 흐름을 판별합니다.
     </div>
     """, unsafe_allow_html=True)
@@ -233,22 +220,37 @@ if target_query:
         st.session_state.recent_searches = st.session_state.recent_searches[:5]
 
     with st.spinner(f"📡 '{display_name}' 딥다이브 분석 중..."):
-        df = get_stock_data(ticker_symbol)
+        raw_df = get_stock_data(ticker_symbol)
         
-    if df.empty:
+    if raw_df.empty:
         st.error("데이터를 찾을 수 없습니다. 종목명을 다시 확인해주세요.")
     else:
-        cur_price = df['Close'].iloc[-1]
-        diff = cur_price - df['Close'].iloc[-2]
+        # 🌟 핵심 구조 최적화: 모드에 따라 뼈대(Dataframe) 자체를 일원화
+        is_short_term = "단기" in analyze_mode
+        time_unit = "일" if is_short_term else "주"
+        
+        if not is_short_term:
+            chart_df = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            chart_df = calculate_indicators(chart_df) # 오직 주봉 기준으로만 지표 연산
+            view_days = 730
+        else:
+            chart_df = calculate_indicators(raw_df.copy()) # 일봉 기준 연산
+            view_days = 180
+
+        # 현재가 및 변동 금액은 가장 신선한 '일봉(raw_df)' 데이터로 유지
+        cur_price = raw_df['Close'].iloc[-1]
+        diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
+        
         st.subheader(f"📑 {display_name} 리포트")
         st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
 
-        q_score = calculate_quant_score(df)
+        # 모든 점수와 분석이 chart_df(선택된 타임프레임)에 완벽히 연동됨
+        q_score = calculate_quant_score(chart_df)
         st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
         st.progress(q_score / 100)
 
-        pts, sup, res = detect_patterns_and_levels(df)
-        pos, reason, comments = generate_signal_and_comments(df, sup, res, currency, decimals, analyze_mode)
+        pts, sup, res = detect_patterns_and_levels(chart_df)
+        pos, reason, comments = generate_signal_and_comments(chart_df, sup, res, currency, decimals, is_short_term, time_unit)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -264,11 +266,11 @@ if target_query:
 
         with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
             for label, key, desc in [
-                ("상대 거래량", "VOL", "평균 거래량 대비 오늘의 거래 에너지를 측정합니다."),
+                ("상대 거래량", "VOL", f"최근 5{time_unit} 평균 대비 현재의 거래 에너지를 측정합니다."),
                 ("OBV 누적", "OBV", "거래량은 주가에 선행한다는 원리의 세력 매집 지표입니다."),
                 ("RSI 강도", "RSI", "주가의 과매수(70↑) 및 과매도(30↓) 상태를 나타냅니다."),
                 ("MACD 흐름", "MACD", "단기/장기 추세의 교차를 통해 반전 타점을 잡습니다."),
-                ("ATR 변동성", "ATR", "일정 기간 주가의 평균 실질 변동폭을 보여줍니다.")
+                ("ATR 변동성", "ATR", f"일정 기간 주가의 평균 실질 변동폭을 보여줍니다.")
             ]:
                 c1, c2 = st.columns([0.2, 0.8])
                 with c1.popover(label, use_container_width=True): st.info(f"**{label}**\n\n{desc}")
@@ -277,28 +279,19 @@ if target_query:
             st.info(comments.get('AI'))
 
         # ==========================================
-        # 🌟 주봉 차트 변환 지원 핀치 줌 차트
+        # 🌟 타임프레임이 완벽히 동기화된 차트 시각화
         # ==========================================
         tab1, tab2 = st.tabs(["주가 차트 (핀치 줌)", "수급 에너지"])
-        
-        # 투자 성향에 따라 차트 데이터 구성 (일봉 vs 주봉)
-        if "장기" in analyze_mode:
-            chart_df = df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'})
-            view_days = 730 # 초기엔 2년치 주봉
-        else:
-            chart_df = df
-            view_days = 180 # 초기엔 6개월치 일봉
-            
         initial_start = datetime.now() - timedelta(days=view_days)
         
         with tab1:
             fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
-            # 이평선은 일봉 데이터 기준으로 그대로 유지하여 정밀도 확보
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20일선', line=dict(color='orange', width=1), opacity=0.5))
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60일선', line=dict(color='green', width=1), opacity=0.5))
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)))
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)))
             fig.update_layout(height=450, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan', hovermode='x unified', xaxis=dict(range=[initial_start, datetime.now()], rangeslider=dict(visible=False)))
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False, 'doubleClick': 'reset+autosize'})
         with tab2:
-            obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'] if 'OBV' in chart_df else df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-            obv_fig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan', xaxis=dict(range=[initial_start, datetime.now()]))
-            st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
+            if 'OBV' in chart_df.columns:
+                obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
+                obv_fig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan', xaxis=dict(range=[initial_start, datetime.now()]))
+                st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
