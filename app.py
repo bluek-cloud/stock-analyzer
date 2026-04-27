@@ -1,10 +1,10 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
 import requests
 import re
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. 페이지 설정 및 제목
@@ -27,57 +27,75 @@ def get_krx_data():
 def parse_query(query):
     query = query.strip().upper()
     krx_df = get_krx_data()
+    # 순수 6자리 코드만 반환하도록 처리
     if query.isdigit() and len(query) == 6:
         matched = krx_df[krx_df['Code'] == query]
         if not matched.empty:
-            name, market = matched.iloc[0]['Name'], matched.iloc[0]['Market']
-            return f"{name} ({query})", f"{query}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
+            name = matched.iloc[0]['Name']
+            return f"{name} ({query})", query, query
     matched = krx_df[krx_df['Name'] == query]
     if not matched.empty:
-        code, market = matched.iloc[0]['Code'], matched.iloc[0]['Market']
-        return f"{query} ({code})", f"{code}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
+        code = matched.iloc[0]['Code']
+        return f"{query} ({code})", code, query
     return f"{query} (해외/기타)", query, query
 
 @st.cache_data(ttl=3600)
-def get_fundamentals(ticker):
+def get_fundamentals(code):
+    sector = '국내 주식'
+    roe, debt_ratio, per, pbr, div_yield, peer_per = None, None, None, None, None, None
+    
+    # 한국 주식(6자리 숫자 코드)이 아닌 해외주식 등은 네이버 파싱을 건너뜁니다.
+    if not (isinstance(code, str) and code.isdigit() and len(code) == 6):
+        return per, pbr, '해외 주식/기타', div_yield, peer_per, roe, debt_ratio
+
     try:
-        info = yf.Ticker(ticker).info
-        sector = info.get('sector', 'KOR Equity')
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0'}
+        res = requests.get(url, headers=headers, timeout=5)
+        res.encoding = 'euc-kr' 
+        text = res.text
         
-        roe = info.get('returnOnEquity')
-        if roe is not None: roe = round(roe * 100, 2)
+        # 🌟 개선: 단순 숫자뿐만 아니라 음수(-), N/A 등 어떤 문자열이든 포획하여 처리
+        def extract_val(pattern):
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                val_str = match.group(1).replace(',', '').strip()
+                try: return float(val_str)
+                except ValueError: return None
+            return None
+
+        per = extract_val(r'<em id="_per">([^<]+)</em>')
+        pbr = extract_val(r'<em id="_pbr">([^<]+)</em>')
+        div_yield = extract_val(r'<em id="_dvr">([^<]+)</em>')
+        peer_per = extract_val(r'동일업종 PER.*?<em>([^<]+)</em>')
         
-        debt_ratio = info.get('debtToEquity')
-        if debt_ratio is not None: debt_ratio = round(debt_ratio, 2)
+        sector_match = re.search(r'<h4 class="h_sub sub_tit7">\s*<a[^>]*>(.*?)</a>', text)
+        if sector_match:
+            sector = sector_match.group(1).strip()
+
+        # 🌟 개선: 테이블 내 구조가 조금씩 다른 종목(금융주 등)도 모두 호환되는 유연한 테이블 파싱
+        def extract_from_table(label_pattern):
+            pattern = rf'<th[^>]*>.*?{label_pattern}.*?</th>(.*?)</tr>'
+            row_match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if row_match:
+                tds = re.findall(r'<td[^>]*>(.*?)</td>', row_match.group(1), re.DOTALL)
+                valid_vals = []
+                for td in tds:
+                    clean_str = re.sub(r'<[^>]+>', '', td).strip().replace(',', '')
+                    try:
+                        valid_vals.append(float(clean_str))
+                    except ValueError:
+                        pass
+                return valid_vals[-1] if valid_vals else None
+            return None
+
+        roe = extract_from_table(r'ROE')
+        debt_ratio = extract_from_table(r'부채비율')
         
-        if ticker.endswith('.KS') or ticker.endswith('.KQ'):
-            code = ticker.split('.')[0]
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers)
-            text = res.text
-            
-            per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
-            pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
-            div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
-            peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
-            
-            per = float(per_match.group(1).replace(',', '')) if per_match else None
-            pbr = float(pbr_match.group(1).replace(',', '')) if pbr_match else None
-            div_yield = float(div_match.group(1).replace(',', '')) if div_match else None
-            peer_per = float(peer_per_match.group(1).replace(',', '')) if peer_per_match else None
-            
-            return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
-            
-        else:
-            per = info.get('trailingPE') or info.get('forwardPE')
-            pbr = info.get('priceToBook')
-            div_yield = info.get('dividendYield')
-            if div_yield: div_yield = round(div_yield * 100, 2)
-            peer_per = info.get('trailingPE') 
-            return per, pbr, sector, div_yield, None, roe, debt_ratio
-    except:
-        return None, None, '알 수 없음', None, None, None, None
+    except Exception:
+        pass
+        
+    return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
 
 def calculate_indicators(df):
     close = df['Close'].squeeze()
@@ -105,9 +123,10 @@ def calculate_indicators(df):
 
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
-    df['OBV'] = (vol * (close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0)))).cumsum()
     
-    # 🌟 신규: 5일 평균 거래량 대비 당일 거래량 비율 계산 (상대 거래량)
+    direction = (delta > 0).astype(int) - (delta < 0).astype(int)
+    df['OBV'] = (vol * direction).cumsum()
+    
     df['Vol_MA5'] = vol.rolling(window=5).mean()
     df['Vol_Ratio'] = (vol / df['Vol_MA5']) * 100
     
@@ -119,21 +138,17 @@ def calculate_quant_score(df):
     prev = df.iloc[-2]
     score = 0
     
-    # RSI (25점 배점)
     if not pd.isna(latest['RSI']):
         if latest['RSI'] < 30: score += 25
         elif latest['RSI'] < 50: score += 15
         elif latest['RSI'] < 70: score += 5
         
-    # MACD (25점 배점)
     if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
         if latest['MACD'] > latest['Signal']: score += 25
         
-    # OBV (30점 배점)
     if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: 
         score += 30
         
-    # 🌟 신규 가중치: 거래량 폭발 (20점 배점 - 주가 상승 동반 시)
     if not pd.isna(latest['Vol_Ratio']):
         if latest['Vol_Ratio'] >= 150 and latest['Close'] > prev['Close']:
             score += 20
@@ -159,12 +174,12 @@ def detect_patterns_and_levels(df):
     return patterns, support, resistance
 
 @st.cache_data(ttl=60)
-def get_stock_data(ticker, mode):
-    period = "2y" if "장기" in mode else "1y"
+def get_stock_data(code, mode):
+    days = 730 if "장기" in mode else 365
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
-        df = yf.Ticker(ticker).history(period=period)
-        if df.empty and ticker.endswith('.KS'):
-            df = yf.Ticker(ticker.replace('.KS', '.KQ')).history(period=period)
+        # fdr을 통해 차트 데이터 안정적으로 로드
+        df = fdr.DataReader(code, start=start_date)
         if df.empty: return pd.DataFrame()
         if df.index.tz is not None: df.index = df.index.tz_localize(None)
         return calculate_indicators(df)
@@ -181,7 +196,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     ma20 = float(latest['MA20'])
     ma200 = float(latest['MA200']) if not pd.isna(latest['MA200']) else close
     bb_lower = float(latest['BB_Lower']) if not pd.isna(latest['BB_Lower']) else close * 0.9
-    bb_upper = float(latest['BB_Upper']) if not pd.isna(latest['BB_Upper']) else close * 1.1
 
     prev20_close = float(df['Close'].iloc[-20]) if len(df) >= 20 else float(df['Close'].iloc[0])
     prev20_obv = float(df['OBV'].iloc[-20]) if len(df) >= 20 else float(df['OBV'].iloc[0])
@@ -208,12 +222,10 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         elif obv_change > 0: comments['OBV'] = "💪 **건강한 상승**: 주가와 매수 거래량이 동반 상승하며 추세를 뒷받침합니다."
         else: comments['OBV'] = "🍂 **수급 악화**: 매도 거래량이 압도하며 자금이 이탈하고 있습니다."
 
-    # 🌟 신규: 상대 거래량 코멘트
     if pd.isna(vol_ratio): comments['VOL'] = "거래량 데이터를 계산할 수 없습니다."
-    elif vol_ratio >= 200: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 5일 평균 대비 거래량이 2배 이상 터졌습니다! 세력 개입이나 강력한 변곡점일 가능성이 높습니다."
-    elif vol_ratio >= 120: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
-    elif vol_ratio >= 80: comments['VOL'] = f"➖ **평균 수준 ({vol_ratio:.0f}%)**: 평소와 비슷한 수준의 무난한 거래가 이루어지고 있습니다."
-    else: comments['VOL'] = f"💤 **소외/관망 ({vol_ratio:.0f}%)**: 거래량이 말라붙었습니다. 에너지를 응축 중이거나 시장의 관심에서 멀어져 있습니다."
+    elif vol_ratio >= 150: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 거래량이 크게 터졌습니다! 세력 개입 가능성이 높습니다."
+    elif vol_ratio >= 110: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
+    else: comments['VOL'] = f"💤 **소외/관망 ({vol_ratio:.0f}%)**: 거래량이 말라붙었습니다. 에너지를 응축 중이거나 관심에서 멀어져 있습니다."
 
     if pd.isna(atr) or pd.isna(close) or close == 0:
         comments['ATR'] = "변동성 데이터를 계산할 수 없습니다."
@@ -233,29 +245,21 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         if per < 0: 
             f_lines.append("🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.")
         elif peer_per is not None and peer_per > 0:
-            if per < peer_per * 0.8: f_lines.append(f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)")
-            elif per > peer_per * 1.2: f_lines.append(f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.")
-            else: f_lines.append(f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.")
-        else:
-            if per < 15.0: f_lines.append(f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.")
-            elif per > 30.0: f_lines.append(f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.")
-            else: f_lines.append(f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.")
+            if per < peer_per * 0.8: f_lines.append(f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다!")
+            elif per > peer_per * 1.2: f_lines.append(f"🔥 **PER({per:.2f})**: 동일업종 평균 대비 주가가 **고평가**를 받고 있습니다.")
+            else: f_lines.append(f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**을 적용받고 있습니다.")
             
     if roe is not None:
         if roe >= 15.0: f_lines.append(f"🏅 **ROE({roe:.2f}%)**: 워런 버핏의 기준(15%)을 통과한 **초우량 수익성**입니다.")
         elif roe >= 8.0: f_lines.append(f"✅ **ROE({roe:.2f}%)**: 안정적이고 양호한 수익성을 보여주고 있습니다.")
-        elif roe > 0: f_lines.append(f"⚠️ **ROE({roe:.2f}%)**: 수익성이 다소 낮은 편입니다. 자본 효율성 개선이 필요합니다.")
-        else: f_lines.append(f"🚨 **ROE({roe:.2f}%)**: 자본 대비 수익이 마이너스(적자) 상태입니다.")
+        else: f_lines.append(f"⚠️ **ROE({roe:.2f}%)**: 수익성이 낮거나 적자 상태입니다.")
         
     if debt_ratio is not None:
-        if any(s in str(sector).lower() for s in ['financial', 'bank', 'insurance']):
-            f_lines.append(f"🏦 **부채비율({debt_ratio:.2f}%)**: 금융업종 특성상 레버리지를 활용하는 정상적인 비즈니스 구조입니다.")
-        else:
-            if debt_ratio <= 100.0: f_lines.append(f"🛡️ **부채비율({debt_ratio:.2f}%)**: 빚이 적고 재무가 **매우 건전**합니다. 금리 인상기에도 끄떡없습니다.")
-            elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
-            else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 부채비율이 200%를 초과하여 **재무 리스크**가 존재합니다.")
+        if debt_ratio <= 100.0: f_lines.append(f"🛡️ **부채비율({debt_ratio:.2f}%)**: 빚이 적고 재무가 **매우 건전**합니다.")
+        elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
+        else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 재무 리스크가 존재할 수 있습니다.")
 
-    comments['FUNDAMENTAL'] = f_lines if f_lines else ["해당 종목의 재무 데이터를 불러올 수 없습니다."]
+    comments['FUNDAMENTAL'] = f_lines if f_lines else ["해당 종목은 일부 재무 데이터가 제공되지 않습니다 (ETF, 신규상장 등)."]
 
     position, reason = "⚖️ 관망 (Neutral)", "추세 확인 후 진입을 권장합니다."
     t_buy = close * 0.95
@@ -307,11 +311,11 @@ if target_query:
     else:
         cur_price = df['Close'].iloc[-1]
         diff = cur_price - df['Close'].iloc[-2]
-        currency = "원" if cur_price > 1000 else "USD"
+        currency = "원"
         mode_badge = "단기" if "단기" in analyze_mode else "장기"
         
         st.subheader(f"📑 {display_name} 리포트 ({mode_badge})")
-        st.metric("현재 주가", f"{cur_price:,.0f} {currency}" if cur_price > 1000 else f"{cur_price:,.2f} {currency}", f"{diff:,.0f} {currency}")
+        st.metric("현재 주가", f"{cur_price:,.0f} {currency}", f"{diff:,.0f} {currency}")
 
         q_score = calculate_quant_score(df)
         st.write("### 💯 퀀트 매수 매력도 점수")
