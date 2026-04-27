@@ -36,7 +36,6 @@ st.markdown("---")
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
-# 🌟 개선: 입력창 동기화 및 즉각적인 검색 트리거를 위한 세션 상태 및 콜백 함수 추가
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'trigger_search' not in st.session_state:
@@ -199,17 +198,26 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     near_sup = dist_to_sup <= 5
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
+    # 🌟 핵심 수정: 포지션 판별 로직 강화 (지표 교차 검증)
     if is_short_term:
-        pos, strategy = "⚖️ 단기 관망", "방향성 탐색 구간으로 단기 추세 확인이 필요합니다."
-        if (rsi < 40 and macd > signal) or (near_sup and bullish_div): pos, strategy = "🔴 단기 적극 매수", "바닥권 수급 개선 및 기술적 반등 시그널이 명확합니다."
-        elif (rsi > 70 and macd < signal): pos, strategy = "🔷 단기 적극 매도", "고점 과열 및 모멘텀 둔화로 리스크 관리가 시급합니다."
-        elif macd > signal: pos, strategy = "🟠 단기 분할 매수", "안정적인 단기 우상향 흐름이 이어지고 있습니다."
+        pos, strategy = "⚖️ 단기 관망", "뚜렷한 방향성이 확인되지 않아 관망을 권장합니다."
+        if (rsi <= 40 and macd > signal) or (near_sup and bullish_div): 
+            pos, strategy = "🔴 단기 적극 매수", "바닥권 수급 개선 및 기술적 반등 시그널이 명확합니다."
+        elif (rsi >= 70 and macd < signal): 
+            pos, strategy = "🔷 단기 적극 매도", "고점 과열 및 모멘텀 둔화로 리스크 관리가 시급합니다."
+        elif macd > signal and obv > simple_prev_obv and rsi < 65: 
+            pos, strategy = "🟠 단기 분할 매수", "수급(OBV)과 모멘텀(MACD)이 동반 개선되는 우상향 흐름입니다."
+        elif macd < signal and obv < simple_prev_obv and rsi > 35: 
+            pos, strategy = "🔵 단기 분할 매도", "수급 이탈과 모멘텀 약화가 진행 중이므로 비중 축소가 필요합니다."
     else:
         ma60 = latest['MA60'] if not pd.isna(latest['MA60']) else close
         pos, strategy = "⚖️ 장기 관망", "대세 전환 에너지를 응축하며 대기 중입니다."
-        if close > ma60 and macd > signal: pos, strategy = "🔴 비중 확대 (장기)", "주봉상 대세 상승장에 진입하여 수익 극대화가 가능합니다."
-        elif close < ma60 and rsi < 35: pos, strategy = "🟠 저점 매수 (장기)", "역사적 저평가 구간으로 분할 매집이 유효합니다."
-        elif rsi > 75: pos, strategy = "🔷 비중 축소 (장기)", "강력한 저항 및 과열권에 도달했습니다. 일부 수익 실현을 권장합니다."
+        if close > ma60 and macd > signal and obv > simple_prev_obv: 
+            pos, strategy = "🔴 비중 확대 (장기)", "주봉상 대세 상승장에 진입하여 수익 극대화가 가능합니다."
+        elif close < ma60 and rsi < 35: 
+            pos, strategy = "🟠 저점 매수 (장기)", "역사적 저평가 구간으로 분할 매집이 유효합니다."
+        elif rsi > 75 or (close < ma60 and macd < signal): 
+            pos, strategy = "🔷 비중 축소 (장기)", "추세 이탈 및 모멘텀 약화로 리스크 관리가 필요합니다."
 
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     trend_dir = "강한 상승 탄력" if macd > signal else "하락 압력 및 매물 소화"
@@ -249,7 +257,6 @@ with st.sidebar:
     st.header("⚙️ 분석 설정")
     analyze_mode = st.radio("투자 성향 설정", ["단기 투자 (6개월 차트/일봉)", "장기 투자 (2년 차트/주봉)"])
     
-    # 🌟 개선: key를 통해 검색 입력창 상태를 세션과 동기화
     new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_query")
     run_btn = st.button("🚀 분석 실행", type="primary", use_container_width=True)
     
@@ -261,7 +268,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    # 🌟 개선: 실행 버튼 클릭 또는 목록 클릭 시 target_query 생성 및 목록 즉시 업데이트
     target_query = None
     if run_btn or st.session_state.trigger_search:
         target_query = st.session_state.search_query
@@ -276,7 +282,6 @@ with st.sidebar:
     st.divider()
     st.subheader("🕒 최근 검색")
     for idx, item in enumerate(st.session_state.recent_searches):
-        # 🌟 개선: on_click 이벤트를 통해 검색창 텍스트 즉시 동기화 및 실행 트리거 발동
         st.button(f"▪️ {item['display_name']}", key=f"rs_{idx}_{item['query']}", use_container_width=True, on_click=on_recent_click, args=(item['query'],))
 
 # ==========================================
