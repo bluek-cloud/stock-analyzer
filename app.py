@@ -220,46 +220,45 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif rsi > 75 or (close < ma60 and macd < signal): 
             pos, strategy = "🔷 비중 축소 (장기)", "추세 이탈 및 모멘텀 약화로 리스크 관리가 필요합니다."
 
+    # 🌟 개선: 전문 퀀트 트레이더 리포트 스타일로 가독성 및 실용성(손절가) 극대화
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
-    trend_dir = "강한 상승 탄력" if macd > signal else "하락 압력 및 매물 소화"
+    trend_dir = "상승 탄력" if macd > signal else "하락 압력"
     
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
     
-    ai_op += f"📈 **[추세 및 모멘텀]**\n현재 이 종목은 {time_unit}봉 기준 **{trend_dir}** 국면에 놓여 있습니다. "
-    if rsi >= 70: ai_op += "RSI가 과열권(70 이상)에 진입하여 단기 고점 징후가 뚜렷하므로, 신규 진입보다는 분할 수익 실현이 유리합니다.\n"
-    elif rsi <= 30: ai_op += "RSI가 침체권(30 이하)에 머물며 투매가 진정되는 낙폭과대 구간으로, 강한 기술적 반등이 기대됩니다.\n"
-    else: ai_op += f"RSI({rsi:.1f})는 중립 수준으로, 뚜렷한 과열이나 침체 없이 위아래로 방향성을 탐색하고 있습니다.\n"
+    ai_op += f"📈 **[추세 및 모멘텀]**\n"
+    ai_op += f"• **방향성:** 현재 {time_unit}봉 기준 **{trend_dir}** 국면에 진입했습니다.\n"
+    if rsi >= 70: ai_op += f"• **과열상태:** RSI({rsi:.1f})가 과열권에 진입했습니다. 단기 고점 징후가 뚜렷하므로 신규 진입보다는 분할 익절을 고려할 시점입니다.\n"
+    elif rsi <= 30: ai_op += f"• **침체상태:** RSI({rsi:.1f})가 투매가 진정되는 낙폭과대 구간에 머물고 있습니다. 강한 기술적 반등이 임박했습니다.\n"
+    else: ai_op += f"• **에너지:** RSI({rsi:.1f})는 중립 수준으로, 현재 주가 수준에서 치열한 매물 공방이 진행 중입니다.\n"
 
-    ai_op += f"\n📊 **[수급 및 에너지]**\n"
-    if obv > simple_prev_obv: ai_op += "최근 주가의 등락과 무관하게 누적 수급(OBV)이 우상향하고 있어 세력의 '숨은 매집' 트렌드가 관찰됩니다. "
-    else: ai_op += "누적 수급(OBV)이 하향 이탈하고 있어 자금 유출 우려가 있으니 방어적인 접근이 필요합니다. "
-    if vol_ratio > 150: ai_op += f"또한 최근 거래량이 평균 대비 {vol_ratio:.0f}%로 폭증하며 의미 있는 에너지가 분출되었습니다.\n"
-    else: ai_op += "현재 거래량은 평이한 수준을 유지 중입니다.\n"
+    ai_op += f"\n📊 **[수급 및 변동성]**\n"
+    if obv > simple_prev_obv: ai_op += "• **세력수급:** 주가의 겉보기 흐름과 별개로 누적 수급(OBV)이 우상향하고 있습니다. **'숨은 매집'** 트렌드로 판단되는 긍정적 시그널입니다.\n"
+    else: ai_op += "• **세력수급:** 누적 수급(OBV)이 하향 이탈하고 있습니다. 스마트 머니의 차익 실현 가능성이 있으니 방어적인 접근이 필요합니다.\n"
+    if vol_ratio > 150: ai_op += f"• **거래량:** 최근 평균 대비 **{vol_ratio:.0f}%**의 대량 거래가 터지며 시장의 강한 주목을 받고 있습니다.\n"
 
     ai_op += f"\n🎯 **[타점 및 리스크 관리]**\n"
-    # 🌟 수정 완료: 신고가 돌파, 지지/저항 오판 방지 수학적 로직 완벽 교정
     if near_sup: 
         if dist_to_sup >= 0:
-            ai_op += f"현재 주가가 주요 지지선(**{sup:,.{decimals}f}{currency}**)에 5% 이내로 근접하며 하방 경직성을 테스트하고 있습니다. 손익비가 유리한 진입 타점입니다. "
+            ai_op += f"• **진입타점:** 현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접했습니다. **손익비가 매우 뛰어난 매수 타점**입니다.\n"
         else:
-            ai_op += f"현재 주가가 주요 지지선(**{sup:,.{decimals}f}{currency}**)을 소폭 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복 여부를 우선 확인하세요. "
+            ai_op += f"• **주의구간:** 지지선을 살짝 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복을 먼저 확인 후 진입하세요.\n"
     else:
         dist_to_res = (res - close) / close * 100 if close > 0 else 100
-        
-        if dist_to_res < -5: # 주가가 과거 저항선을 5% 이상 크게 돌파하여 날아갈 때
-            ai_op += f"과거 주요 저항선(**{res:,.{decimals}f}{currency}**)을 강하게 상향 돌파하며 새로운 시세를 분출하고 있습니다. 뚜렷한 추세 상승장이 이어지고 있습니다. "
-        elif abs(dist_to_res) <= 5: # 저항선 근방
-            if dist_to_res <= 0:
-                ai_op += f"주요 저항선(**{res:,.{decimals}f}{currency}**)을 뚫어내고 상향 안착을 시도 중입니다. "
-            else:
-                ai_op += f"주요 저항선(**{res:,.{decimals}f}{currency}**) 돌파를 목전에 두고 있습니다. 저항 돌파 실패 시 실망 매물이 나올 수 있으니 돌파 여부를 확인하세요. "
-        elif dist_to_sup < -5: # 지지선 완전 이탈
-            ai_op += f"주요 지지선(**{sup:,.{decimals}f}{currency}**)을 5% 이상 뚜렷하게 이탈하며 하락 추세가 심화되었습니다. 보수적인 리스크 관리가 시급합니다. "
-        else: # 진짜 중간 지대
-            ai_op += f"현재 주요 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**) 사이의 중간 지대에 위치해 있어 확실한 방향성이 나타날 때까지 관망이 유리합니다. "
+        if dist_to_res < -5: 
+            ai_op += f"• **추세추종:** 과거 주요 저항선(**{res:,.{decimals}f}{currency}**)을 강하게 상향 돌파하며 새로운 시세를 분출하고 있습니다. 달리는 말에 올라타는 돌파 매매가 유효합니다.\n"
+        elif abs(dist_to_res) <= 5:
+            if dist_to_res <= 0: ai_op += f"• **돌파시도:** 주요 저항선(**{res:,.{decimals}f}{currency}**)을 뚫어내고 상향 안착을 시도 중입니다.\n"
+            else: ai_op += f"• **저항목전:** 주요 저항선 돌파를 앞두고 있습니다. 저항선 돌파 실패 시 단기 실망 매물이 쏟아질 수 있습니다.\n"
+        elif dist_to_sup < -5: 
+            ai_op += f"• **투매주의:** 주요 지지선을 5% 이상 뚜렷하게 이탈한 상태입니다. '떨어지는 칼날'이 될 수 있으므로 섣부른 물타기를 자제하세요.\n"
+        else: 
+            ai_op += f"• **관망구간:** 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**)의 중간 지점입니다. 확실한 방향성이 나타날 때까지 관망이 유리합니다.\n"
+    
+    ai_op += f"• **손절기준:** 현재 이 종목의 실질 변동폭(ATR)은 **{vol_pct:.1f}% ({atr:,.{decimals}f}{currency})**입니다. 노이즈로 인한 휩소(속임수)에 털리지 않도록 진입가 대비 **최소 이 범위 이상**으로 손절 라인을 넉넉히 설정하세요.\n"
 
     if bullish_div: 
-        ai_op += "\n\n💡 **[핵심 패턴: 상승 다이버전스]** 스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다! 이는 추세 반전을 암시하는 매우 신뢰도 높은 매수 시그널입니다."
+        ai_op += "\n💡 **[핵심 패턴: 상승 다이버전스 포착!]**\n스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다. 이는 추세 반전을 암시하는 강력한 매수 시그널입니다."
 
     comments['AI'] = f"{ai_op}\n\n🔥 **최종 투자 전략:** {strategy} (AI 권장 포지션: **{pos}**)"
     
