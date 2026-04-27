@@ -273,17 +273,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 개선 3: 퀀트 스코어를 포지션 신뢰도 보조 필터로 연동
-    # 스코어가 포지션 방향과 심하게 불일치하면 관망으로 하향 조정합니다.
-    q_score = calculate_quant_score(df, is_short_term)
-    buy_positions  = {"🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 비중 확대 (장기)", "🟠 저점 매수 (장기)"}
-    sell_positions = {"🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔷 비중 축소 (장기)"}
-    if pos in buy_positions and q_score < 30:
-        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
-        strategy = f"매수 신호가 감지되었으나 퀀트 스코어({q_score}점)가 낮아 신뢰도가 부족합니다. 추가 확인 후 진입하세요."
-    elif pos in sell_positions and q_score > 70:
-        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
-        strategy = f"매도 신호가 감지되었으나 퀀트 스코어({q_score}점)가 높아 신호가 상충합니다. 방향성 확인 후 대응하세요."
     if is_short_term:
         ma20 = latest['MA20'] if not pd.isna(latest['MA20']) else close
         pos, strategy = "⚖️ 단기 관망", "뚜렷한 방향성이 확인되지 않아 관망을 권장합니다."
@@ -308,6 +297,18 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         # 수급 악화(OBV 감소) 조건 추가로 모순 방지
         elif rsi > 75 or (close < ma60 and macd < signal and obv < simple_prev_obv): 
             pos, strategy = "🔷 비중 축소 (장기)", "추세 이탈 및 수급 악화로 리스크 관리가 필요합니다."
+
+    # 🌟 개선 3: 퀀트 스코어를 포지션 신뢰도 보조 필터로 연동
+    # 포지션이 결정된 후, 스코어와 심하게 불일치하면 관망으로 하향 조정합니다.
+    q_score = calculate_quant_score(df, is_short_term)
+    buy_positions  = {"🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 비중 확대 (장기)", "🟠 저점 매수 (장기)"}
+    sell_positions = {"🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔷 비중 축소 (장기)"}
+    if pos in buy_positions and q_score < 30:
+        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
+        strategy = f"매수 신호가 감지되었으나 퀀트 스코어({q_score}점)가 낮아 신뢰도가 부족합니다. 추가 확인 후 진입하세요."
+    elif pos in sell_positions and q_score > 70:
+        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
+        strategy = f"매도 신호가 감지되었으나 퀀트 스코어({q_score}점)가 높아 신호가 상충합니다. 방향성 확인 후 대응하세요."
 
     # 🌟 핵심 수정 3: 가독성을 위한 마크다운 줄바꿈(\n\n) 완벽 적용
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
