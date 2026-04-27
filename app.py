@@ -130,8 +130,11 @@ def detect_patterns_and_levels(df):
     if lower_shadow > body * 2 and upper_shadow < body: patterns.append("🔨 망치형 (바닥권 반등 신호)")
     if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
     
-    support = df['Close'].tail(60).min()
-    resistance = df['Close'].tail(60).max()
+    # 🌟 수정: '오늘의 종가'를 포함시켜버리면 하락장 신저가를 지지선으로 오판하는 오류 수정
+    # 오늘 이전의 과거 60일 데이터로 지지/저항선을 구축해야 정확함
+    past_df = df.iloc[-61:-1] if len(df) > 60 else df.iloc[:-1]
+    support = past_df['Close'].min() if not past_df.empty else latest['Close']
+    resistance = past_df['Close'].max() if not past_df.empty else latest['Close']
     return patterns, support, resistance
 
 @st.cache_data(ttl=60)
@@ -194,11 +197,12 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     comments['ATR'] = f"현재 {time_unit}당 평균 **{vol_pct:.1f}% ({atr:,.{decimals}f}{currency})**의 실질 변동폭을 보입니다. "
     comments['ATR'] += f"예상치 못한 노이즈를 피하기 위한 손절가 설정의 기준으로 참고하세요."
 
+    # 🌟 수정: 절대값 기반으로 거리 오판 방지 및 근접 기준 정교화
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
-    near_sup = dist_to_sup <= 5
+    near_sup = abs(dist_to_sup) <= 5 # 음수(이탈)라도 5% 이내면 근방으로 인식
+    
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 핵심 수정: 포지션 판별 로직 강화 (지표 교차 검증)
     if is_short_term:
         pos, strategy = "⚖️ 단기 관망", "뚜렷한 방향성이 확인되지 않아 관망을 권장합니다."
         if (rsi <= 40 and macd > signal) or (near_sup and bullish_div): 
@@ -235,13 +239,21 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     if vol_ratio > 150: ai_op += f"또한 최근 거래량이 평균 대비 {vol_ratio:.0f}%로 폭증하며 의미 있는 에너지가 분출되었습니다.\n"
     else: ai_op += "현재 거래량은 평이한 수준을 유지 중입니다.\n"
 
+    # 🌟 수정: 이탈과 근접을 정확히 구별하여 엉뚱한 타점 권장 차단
     ai_op += f"\n🎯 **[타점 및 리스크 관리]**\n"
     if near_sup: 
-        ai_op += f"현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 5% 이내로 근접하여 하방 경직성이 확보되었습니다. 손익비가 훌륭한 진입 타점입니다. "
+        if dist_to_sup >= 0:
+            ai_op += f"현재 주가가 주요 지지선(**{sup:,.{decimals}f}{currency}**)에 5% 이내로 근접하며 하방 경직성을 테스트하고 있습니다. 손익비가 유리한 진입 타점입니다. "
+        else:
+            ai_op += f"현재 주가가 주요 지지선(**{sup:,.{decimals}f}{currency}**)을 소폭 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복 여부를 우선 확인하세요. "
     else:
         dist_to_res = (res - close) / close * 100 if close > 0 else 100
-        if dist_to_res <= 5: ai_op += f"주요 저항선(**{res:,.{decimals}f}{currency}**) 돌파를 목전에 두고 있습니다. 저항 돌파 실패 시 실망 매물이 나올 수 있으니 안착을 확인하세요. "
-        else: ai_op += f"현재 주요 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**) 사이의 중간 지대에 위치해 있습니다. "
+        if abs(dist_to_res) <= 5: 
+            ai_op += f"주요 저항선(**{res:,.{decimals}f}{currency}**) 돌파를 목전에 두고 있습니다. 저항 돌파 실패 시 실망 매물이 나올 수 있으니 안착을 확인하세요. "
+        elif dist_to_sup < -5:
+            ai_op += f"주요 지지선(**{sup:,.{decimals}f}{currency}**)을 5% 이상 뚜렷하게 이탈하며 하락 추세가 강화되었습니다. 보수적인 리스크 관리가 시급합니다. "
+        else: 
+            ai_op += f"현재 주요 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**) 사이의 중간 지대에 위치해 있습니다. "
 
     if bullish_div: 
         ai_op += "\n\n💡 **[핵심 패턴: 상승 다이버전스]** 스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다! 이는 추세 반전을 암시하는 매우 신뢰도 높은 매수 시그널입니다."
@@ -331,10 +343,20 @@ if target_query:
                 st.write(f"📍 **패턴:** {p_text}")
                 st.write(f"🛡️ **지지:** {sup:,.{decimals}f} {currency} | 🚧 **저항:** {res:,.{decimals}f} {currency}")
 
+        # 🌟 수정: 팝오버 클릭 시 초보자도 이해하기 쉽도록 매우 상세한 설명 문구 제공
         with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
+            indicator_descriptions = {
+                "상대 거래량": "**상대 거래량 (Relative Volume)**\n\n최근 5일(주) 평균 거래량 대비 현재 거래량의 비율입니다. 150% 이상일 경우 평소보다 많은 자금이 유입되며 의미 있는 변동성이 발생하고 있음을 뜻합니다.",
+                "OBV 누적": "**OBV (On Balance Volume)**\n\n주가가 상승한 날의 거래량은 더하고 하락한 날의 거래량은 빼서 누적한 수급 지표입니다. 주가가 횡보/하락함에도 OBV가 상승하면 세력의 '매집'으로, 반대의 경우 '분산(이탈)'으로 해석합니다.",
+                "RSI 강도": "**RSI (상대강도지수)**\n\n주가의 상승폭과 하락폭을 바탕으로 과열 상태를 수치화한 모멘텀 지표입니다.\n• **70 이상**: 과매수 (단기 고점 징후, 수익실현 고려)\n• **30 이하**: 과매도 (단기 바닥 징후, 반등/진입 고려)",
+                "MACD 흐름": "**MACD (이동평균수렴확산지수)**\n\n단기 이동평균선과 장기 이동평균선의 차이를 이용해 추세의 방향과 힘을 파악합니다. MACD 선이 시그널 선을 상향 돌파(골든크로스)하면 매수, 하향 돌파(데드크로스)하면 매도 신호로 해석합니다.",
+                "ATR 변동성": "**ATR (평균진정범위)**\n\n고점과 저점, 전일 종가를 모두 고려한 '실질적인 주가 변동폭'의 평균입니다. 이 수치가 높을수록 위아래 흔들림이 크다는 의미이며, 자신의 투자 성향에 맞는 손절가(Stop Loss)를 설정할 때 유용하게 쓰입니다."
+            }
+            
             for label, key in [("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                 c1, c2 = st.columns([0.25, 0.75])
-                with c1.popover(label, use_container_width=True): st.info(f"**{label}**")
+                with c1.popover(label, use_container_width=True): 
+                    st.info(indicator_descriptions.get(label, f"**{label}**"))
                 c2.markdown(comments.get(key, '데이터 없음'))
             st.divider()
             st.info(comments.get('AI'))
