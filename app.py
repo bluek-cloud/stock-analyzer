@@ -36,6 +36,16 @@ st.markdown("---")
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
+# 🌟 개선: 입력창 동기화 및 즉각적인 검색 트리거를 위한 세션 상태 및 콜백 함수 추가
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+if 'trigger_search' not in st.session_state:
+    st.session_state.trigger_search = False
+
+def on_recent_click(query):
+    st.session_state.search_query = query
+    st.session_state.trigger_search = True
+
 # ==========================================
 # 2. 데이터 처리 및 지표 계산 함수
 # ==========================================
@@ -201,26 +211,22 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif close < ma60 and rsi < 35: pos, strategy = "🟠 저점 매수 (장기)", "역사적 저평가 구간으로 분할 매집이 유효합니다."
         elif rsi > 75: pos, strategy = "🔷 비중 축소 (장기)", "강력한 저항 및 과열권에 도달했습니다. 일부 수익 실현을 권장합니다."
 
-    # 🌟 개선: AI 분석 텍스트 고도화 (구조화 및 상세화)
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     trend_dir = "강한 상승 탄력" if macd > signal else "하락 압력 및 매물 소화"
     
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
     
-    # 1. 추세 및 모멘텀
     ai_op += f"📈 **[추세 및 모멘텀]**\n현재 이 종목은 {time_unit}봉 기준 **{trend_dir}** 국면에 놓여 있습니다. "
     if rsi >= 70: ai_op += "RSI가 과열권(70 이상)에 진입하여 단기 고점 징후가 뚜렷하므로, 신규 진입보다는 분할 수익 실현이 유리합니다.\n"
     elif rsi <= 30: ai_op += "RSI가 침체권(30 이하)에 머물며 투매가 진정되는 낙폭과대 구간으로, 강한 기술적 반등이 기대됩니다.\n"
     else: ai_op += f"RSI({rsi:.1f})는 중립 수준으로, 뚜렷한 과열이나 침체 없이 위아래로 방향성을 탐색하고 있습니다.\n"
 
-    # 2. 수급 및 변동성
     ai_op += f"\n📊 **[수급 및 에너지]**\n"
     if obv > simple_prev_obv: ai_op += "최근 주가의 등락과 무관하게 누적 수급(OBV)이 우상향하고 있어 세력의 '숨은 매집' 트렌드가 관찰됩니다. "
     else: ai_op += "누적 수급(OBV)이 하향 이탈하고 있어 자금 유출 우려가 있으니 방어적인 접근이 필요합니다. "
     if vol_ratio > 150: ai_op += f"또한 최근 거래량이 평균 대비 {vol_ratio:.0f}%로 폭증하며 의미 있는 에너지가 분출되었습니다.\n"
     else: ai_op += "현재 거래량은 평이한 수준을 유지 중입니다.\n"
 
-    # 3. 타점 및 리스크 관리
     ai_op += f"\n🎯 **[타점 및 리스크 관리]**\n"
     if near_sup: 
         ai_op += f"현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 5% 이내로 근접하여 하방 경직성이 확보되었습니다. 손익비가 훌륭한 진입 타점입니다. "
@@ -229,7 +235,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         if dist_to_res <= 5: ai_op += f"주요 저항선(**{res:,.{decimals}f}{currency}**) 돌파를 목전에 두고 있습니다. 저항 돌파 실패 시 실망 매물이 나올 수 있으니 안착을 확인하세요. "
         else: ai_op += f"현재 주요 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**) 사이의 중간 지대에 위치해 있습니다. "
 
-    # 4. 특이 패턴 (다이버전스)
     if bullish_div: 
         ai_op += "\n\n💡 **[핵심 패턴: 상승 다이버전스]** 스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다! 이는 추세 반전을 암시하는 매우 신뢰도 높은 매수 시그널입니다."
 
@@ -243,7 +248,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 with st.sidebar:
     st.header("⚙️ 분석 설정")
     analyze_mode = st.radio("투자 성향 설정", ["단기 투자 (6개월 차트/일봉)", "장기 투자 (2년 차트/주봉)"])
-    new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등")
+    
+    # 🌟 개선: key를 통해 검색 입력창 상태를 세션과 동기화
+    new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_query")
     run_btn = st.button("🚀 분석 실행", type="primary", use_container_width=True)
     
     st.markdown(f"""
@@ -254,22 +261,29 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    target_query = new_search if run_btn else None
+    # 🌟 개선: 실행 버튼 클릭 또는 목록 클릭 시 target_query 생성 및 목록 즉시 업데이트
+    target_query = None
+    if run_btn or st.session_state.trigger_search:
+        target_query = st.session_state.search_query
+        st.session_state.trigger_search = False
+        
+        if target_query:
+            display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
+            if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
+                st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
+                st.session_state.recent_searches = st.session_state.recent_searches[:5]
     
     st.divider()
     st.subheader("🕒 최근 검색")
     for idx, item in enumerate(st.session_state.recent_searches):
-        if st.button(f"▪️ {item['display_name']}", key=f"rs_{idx}_{item['query']}", use_container_width=True):
-            target_query = item['query']
+        # 🌟 개선: on_click 이벤트를 통해 검색창 텍스트 즉시 동기화 및 실행 트리거 발동
+        st.button(f"▪️ {item['display_name']}", key=f"rs_{idx}_{item['query']}", use_container_width=True, on_click=on_recent_click, args=(item['query'],))
 
 # ==========================================
 # 4. 메인 화면 분석 결과 출력
 # ==========================================
 if target_query:
     display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
-    if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
-        st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
-        st.session_state.recent_searches = st.session_state.recent_searches[:5]
 
     with st.spinner(f"📡 '{display_name}' 딥다이브 리포트 생성 중..."):
         raw_df = get_stock_data(ticker_symbol)
