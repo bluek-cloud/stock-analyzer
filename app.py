@@ -155,7 +155,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     atr = float(latest['ATR']) if not pd.isna(latest['ATR']) else 0
     obv = float(latest['OBV']) if not pd.isna(latest['OBV']) else 0
     
-    simple_lookback = min(20, len(df) - 1) if len(df) > 1 else 1
+    # 🌟 핵심 수정 1: OBV 수급 민감도를 최대로 끌어올림 (20 -> 5로 축소)
+    # 이제 최근 5일(주)간의 생생한 수급 흐름만 비교하여 모순된 의견을 제거합니다.
+    simple_lookback = min(5, len(df) - 1) if len(df) > 1 else 1
     simple_prev_obv = float(df['OBV'].iloc[-simple_lookback])
     
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
@@ -200,67 +202,73 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
+    # 🌟 핵심 수정 2: '단기 분할 매수' 허들 대폭 상향 (추세선(MA20) 안착 필수)
     if is_short_term:
+        ma20 = latest['MA20'] if not pd.isna(latest['MA20']) else close
         pos, strategy = "⚖️ 단기 관망", "뚜렷한 방향성이 확인되지 않아 관망을 권장합니다."
+        
         if (rsi <= 40 and macd > signal) or (near_sup and bullish_div): 
             pos, strategy = "🔴 단기 적극 매수", "바닥권 수급 개선 및 기술적 반등 시그널이 명확합니다."
         elif (rsi >= 70 and macd < signal): 
             pos, strategy = "🔷 단기 적극 매도", "고점 과열 및 모멘텀 둔화로 리스크 관리가 시급합니다."
-        elif macd > signal and obv > simple_prev_obv and rsi < 65: 
-            pos, strategy = "🟠 단기 분할 매수", "수급(OBV)과 모멘텀(MACD)이 동반 개선되는 우상향 흐름입니다."
-        elif macd < signal and obv < simple_prev_obv and rsi > 35: 
-            pos, strategy = "🔵 단기 분할 매도", "수급 이탈과 모멘텀 약화가 진행 중이므로 비중 축소가 필요합니다."
+        # MA20(생명선)을 돌파하고 수급까지 개선될 때만 분할 매수로 인정
+        elif close > ma20 and macd > signal and obv > simple_prev_obv and rsi < 65: 
+            pos, strategy = "🟠 단기 분할 매수", "단기 생명선(20일선) 위에서 수급(OBV)과 모멘텀(MACD)이 동반 개선되는 탄탄한 흐름입니다."
+        elif close < ma20 and macd < signal and obv < simple_prev_obv and rsi > 35: 
+            pos, strategy = "🔵 단기 분할 매도", "추세선 이탈 및 수급 악화가 동시 진행 중이므로 비중 축소가 필요합니다."
     else:
         ma60 = latest['MA60'] if not pd.isna(latest['MA60']) else close
         pos, strategy = "⚖️ 장기 관망", "대세 전환 에너지를 응축하며 대기 중입니다."
+        
         if close > ma60 and macd > signal and obv > simple_prev_obv: 
             pos, strategy = "🔴 비중 확대 (장기)", "주봉상 대세 상승장에 진입하여 수익 극대화가 가능합니다."
         elif close < ma60 and rsi < 35: 
             pos, strategy = "🟠 저점 매수 (장기)", "역사적 저평가 구간으로 분할 매집이 유효합니다."
-        elif rsi > 75 or (close < ma60 and macd < signal): 
-            pos, strategy = "🔷 비중 축소 (장기)", "추세 이탈 및 모멘텀 약화로 리스크 관리가 필요합니다."
+        # 수급 악화(OBV 감소) 조건 추가로 모순 방지
+        elif rsi > 75 or (close < ma60 and macd < signal and obv < simple_prev_obv): 
+            pos, strategy = "🔷 비중 축소 (장기)", "추세 이탈 및 수급 악화로 리스크 관리가 필요합니다."
 
-    # 🌟 개선: 전문 퀀트 트레이더 리포트 스타일로 가독성 및 실용성(손절가) 극대화
+    # 🌟 핵심 수정 3: 가독성을 위한 마크다운 줄바꿈(\n\n) 완벽 적용
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     trend_dir = "상승 탄력" if macd > signal else "하락 압력"
     
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
     
-    ai_op += f"📈 **[추세 및 모멘텀]**\n"
-    ai_op += f"• **방향성:** 현재 {time_unit}봉 기준 **{trend_dir}** 국면에 진입했습니다.\n"
-    if rsi >= 70: ai_op += f"• **과열상태:** RSI({rsi:.1f})가 과열권에 진입했습니다. 단기 고점 징후가 뚜렷하므로 신규 진입보다는 분할 익절을 고려할 시점입니다.\n"
-    elif rsi <= 30: ai_op += f"• **침체상태:** RSI({rsi:.1f})가 투매가 진정되는 낙폭과대 구간에 머물고 있습니다. 강한 기술적 반등이 임박했습니다.\n"
-    else: ai_op += f"• **에너지:** RSI({rsi:.1f})는 중립 수준으로, 현재 주가 수준에서 치열한 매물 공방이 진행 중입니다.\n"
+    ai_op += f"📈 **[추세 및 모멘텀]**\n\n"
+    ai_op += f"• **방향성:** 현재 {time_unit}봉 기준 **{trend_dir}** 국면에 진입했습니다.\n\n"
+    if rsi >= 70: ai_op += f"• **과열상태:** RSI({rsi:.1f})가 과열권에 진입하여 단기 고점 징후가 뚜렷하므로, 신규 진입보다는 분할 익절을 고려할 시점입니다.\n\n"
+    elif rsi <= 30: ai_op += f"• **침체상태:** RSI({rsi:.1f})가 투매가 진정되는 낙폭과대 구간에 머물고 있습니다. 강한 기술적 반등이 임박했습니다.\n\n"
+    else: ai_op += f"• **에너지:** RSI({rsi:.1f})는 중립 수준으로, 현재 주가 수준에서 치열한 매물 공방이 진행 중입니다.\n\n"
 
-    ai_op += f"\n📊 **[수급 및 변동성]**\n"
-    if obv > simple_prev_obv: ai_op += "• **세력수급:** 주가의 겉보기 흐름과 별개로 누적 수급(OBV)이 우상향하고 있습니다. **'숨은 매집'** 트렌드로 판단되는 긍정적 시그널입니다.\n"
-    else: ai_op += "• **세력수급:** 누적 수급(OBV)이 하향 이탈하고 있습니다. 스마트 머니의 차익 실현 가능성이 있으니 방어적인 접근이 필요합니다.\n"
-    if vol_ratio > 150: ai_op += f"• **거래량:** 최근 평균 대비 **{vol_ratio:.0f}%**의 대량 거래가 터지며 시장의 강한 주목을 받고 있습니다.\n"
+    ai_op += f"📊 **[수급 및 변동성]**\n\n"
+    if obv > simple_prev_obv: ai_op += "• **세력수급:** 주가의 겉보기 흐름과 별개로 단기 누적 수급(OBV)이 우상향하고 있습니다. **'숨은 매집'** 트렌드로 판단되는 긍정적 시그널입니다.\n\n"
+    else: ai_op += "• **세력수급:** 단기 누적 수급(OBV)이 하향 이탈하고 있습니다. 스마트 머니의 차익 실현 가능성이 있으니 방어적인 접근이 필요합니다.\n\n"
+    if vol_ratio > 150: ai_op += f"• **거래량:** 최근 평균 대비 **{vol_ratio:.0f}%**의 대량 거래가 터지며 시장의 강한 주목을 받고 있습니다.\n\n"
 
-    ai_op += f"\n🎯 **[타점 및 리스크 관리]**\n"
+    ai_op += f"🎯 **[타점 및 리스크 관리]**\n\n"
     if near_sup: 
         if dist_to_sup >= 0:
-            ai_op += f"• **진입타점:** 현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접했습니다. **손익비가 매우 뛰어난 매수 타점**입니다.\n"
+            ai_op += f"• **진입타점:** 현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접했습니다. **손익비가 뛰어난 매수 타점**입니다.\n\n"
         else:
-            ai_op += f"• **주의구간:** 지지선을 살짝 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복을 먼저 확인 후 진입하세요.\n"
+            ai_op += f"• **주의구간:** 지지선을 살짝 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복을 먼저 확인 후 진입하세요.\n\n"
     else:
         dist_to_res = (res - close) / close * 100 if close > 0 else 100
         if dist_to_res < -5: 
-            ai_op += f"• **추세추종:** 과거 주요 저항선(**{res:,.{decimals}f}{currency}**)을 강하게 상향 돌파하며 새로운 시세를 분출하고 있습니다. 달리는 말에 올라타는 돌파 매매가 유효합니다.\n"
+            ai_op += f"• **추세추종:** 과거 주요 저항선(**{res:,.{decimals}f}{currency}**)을 강하게 상향 돌파하며 새로운 시세를 분출하고 있습니다. 달리는 말에 올라타는 돌파 매매가 유효합니다.\n\n"
         elif abs(dist_to_res) <= 5:
-            if dist_to_res <= 0: ai_op += f"• **돌파시도:** 주요 저항선(**{res:,.{decimals}f}{currency}**)을 뚫어내고 상향 안착을 시도 중입니다.\n"
-            else: ai_op += f"• **저항목전:** 주요 저항선 돌파를 앞두고 있습니다. 저항선 돌파 실패 시 단기 실망 매물이 쏟아질 수 있습니다.\n"
+            if dist_to_res <= 0: ai_op += f"• **돌파시도:** 주요 저항선(**{res:,.{decimals}f}{currency}**)을 뚫어내고 상향 안착을 시도 중입니다.\n\n"
+            else: ai_op += f"• **저항목전:** 주요 저항선 돌파를 앞두고 있습니다. 저항선 돌파 실패 시 단기 실망 매물이 쏟아질 수 있습니다.\n\n"
         elif dist_to_sup < -5: 
-            ai_op += f"• **투매주의:** 주요 지지선을 5% 이상 뚜렷하게 이탈한 상태입니다. '떨어지는 칼날'이 될 수 있으므로 섣부른 물타기를 자제하세요.\n"
+            ai_op += f"• **투매주의:** 주요 지지선을 5% 이상 뚜렷하게 이탈한 상태입니다. '떨어지는 칼날'이 될 수 있으므로 섣부른 물타기를 자제하세요.\n\n"
         else: 
-            ai_op += f"• **관망구간:** 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**)의 중간 지점입니다. 확실한 방향성이 나타날 때까지 관망이 유리합니다.\n"
+            ai_op += f"• **관망구간:** 지지선(**{sup:,.{decimals}f}{currency}**)과 저항선(**{res:,.{decimals}f}{currency}**)의 중간 지점입니다. 확실한 방향성이 나타날 때까지 관망이 유리합니다.\n\n"
     
-    ai_op += f"• **손절기준:** 현재 이 종목의 실질 변동폭(ATR)은 **{vol_pct:.1f}% ({atr:,.{decimals}f}{currency})**입니다. 노이즈로 인한 휩소(속임수)에 털리지 않도록 진입가 대비 **최소 이 범위 이상**으로 손절 라인을 넉넉히 설정하세요.\n"
+    ai_op += f"• **손절기준:** 현재 이 종목의 실질 변동폭(ATR)은 **{vol_pct:.1f}% ({atr:,.{decimals}f}{currency})**입니다. 노이즈로 인한 휩소(속임수)에 털리지 않도록 진입가 대비 **최소 이 범위 이상**으로 손절 라인을 넉넉히 설정하세요.\n\n"
 
     if bullish_div: 
-        ai_op += "\n💡 **[핵심 패턴: 상승 다이버전스 포착!]**\n스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다. 이는 추세 반전을 암시하는 강력한 매수 시그널입니다."
+        ai_op += "💡 **[핵심 패턴: 상승 다이버전스 포착!]**\n\n스윙 로우(최근 저점) 대비 주가는 하락했으나 보조지표(RSI/OBV)는 오히려 상승하는 다이버전스가 포착되었습니다. 이는 추세 반전을 암시하는 강력한 매수 시그널입니다.\n\n"
 
-    comments['AI'] = f"{ai_op}\n\n🔥 **최종 투자 전략:** {strategy} (AI 권장 포지션: **{pos}**)"
+    comments['AI'] = f"{ai_op}🔥 **최종 투자 전략:** {strategy} (AI 권장 포지션: **{pos}**)"
     
     return pos, strategy, comments
 
