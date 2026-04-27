@@ -7,9 +7,9 @@ from datetime import datetime, timedelta
 # ==========================================
 # 1. 페이지 설정 및 제목
 # ==========================================
-st.set_page_config(page_title="실시간 매수매도분석기", layout="wide")
+st.set_page_config(page_title="StockMap", layout="wide")
 
-st.title("📈 실시간 매수매도분석기")
+st.title("📈 StockMap")
 st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
@@ -236,7 +236,6 @@ if target_query:
         pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode)
         pts, sup, res = detect_patterns_and_levels(df)
         
-        # 🌟 기업 기초 체력을 완전히 제거하고 매매 타이밍과 패턴을 나란히 배치
         col1, col2 = st.columns(2)
         with col1:
             with st.container(border=True):
@@ -251,30 +250,30 @@ if target_query:
                 st.write(f"📍 **발견된 패턴:** {p_text}")
                 st.write(f"🛡️ **심리적 지지선:** {sup:,.0f}\n\n🚧 **강력 저항선:** {res:,.0f}")
 
-        # 🌟 타이틀 자체를 누르는 팝오버 방식 (직관적인 UI)
+        # 🌟 타이틀 자체를 누르는 팝오버 방식 (? 아이콘 제거)
         with st.expander("🔬 기술적 지표 상세 분석 보기", expanded=True):
             c1, c2 = st.columns([0.15, 0.85])
-            with c1.popover("상대 거래량 ❓", use_container_width=True):
+            with c1.popover("상대 거래량", use_container_width=True):
                 st.info("**상대 거래량(Relative Volume)**\n\n최근 5일 평균 거래량 대비 오늘 거래량이 얼마나 터졌는지를 나타냅니다. 150~200% 이상이면 세력 유입이나 강한 추세 변화의 신호로 봅니다.")
             c2.markdown(comments.get('VOL', '데이터 없음'))
             
             c1, c2 = st.columns([0.15, 0.85])
-            with c1.popover("OBV 누적 ❓", use_container_width=True):
+            with c1.popover("OBV 누적", use_container_width=True):
                 st.info("**OBV(On-Balance Volume)**\n\n거래량은 주가에 선행한다는 원리를 이용한 지표입니다. 주가가 하락해도 OBV가 상승하면 '숨은 매집'으로 판단하며, 반대의 경우 '이탈 징후'로 봅니다.")
             c2.markdown(comments.get('OBV', '데이터 없음'))
             
             c1, c2 = st.columns([0.15, 0.85])
-            with c1.popover("RSI 강도 ❓", use_container_width=True):
+            with c1.popover("RSI 강도", use_container_width=True):
                 st.info("**RSI(상대강도지수)**\n\n주가의 상승 압력과 하락 압력 간의 상대적 강도를 나타냅니다. 70 이상은 '과매수(거품)', 30 이하는 '과매도(저평가)' 구간으로 해석합니다.")
             c2.markdown(comments.get('RSI', '데이터 없음'))
             
             c1, c2 = st.columns([0.15, 0.85])
-            with c1.popover("MACD 흐름 ❓", use_container_width=True):
+            with c1.popover("MACD 흐름", use_container_width=True):
                 st.info("**MACD(이동평균 수렴확산)**\n\n단기 추세선과 장기 추세선이 얼마나 가까워지고 멀어지는지를 측정합니다. 골든크로스가 발생하면 상승 추세의 시작으로 봅니다.")
             c2.markdown(comments.get('MACD', '데이터 없음'))
             
             c1, c2 = st.columns([0.15, 0.85])
-            with c1.popover("ATR 변동성 ❓", use_container_width=True):
+            with c1.popover("ATR 변동성", use_container_width=True):
                 st.info("**ATR(평균 실변동폭)**\n\n일정 기간 동안 주가가 얼마나 '출렁'거렸는지 변동성을 보여줍니다. ATR이 높을수록 주가가 급등락하기 쉬우므로 위험 관리가 필요합니다.")
             c2.markdown(comments.get('ATR', '데이터 없음'))
 
