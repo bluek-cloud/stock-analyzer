@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots # 🌟 RSI 하단 배치를 위한 서브플롯 임포트
+from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import random
@@ -36,6 +36,13 @@ st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
+
+# 🌟 누락되었던 관심 종목 세션 초기화 코드 복구!
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = [
+        {'name': '삼성전자', 'code': '005930'},
+        {'name': 'APPLE', 'code': 'AAPL'}
+    ]
 
 # ==========================================
 # 2. 데이터 처리 및 지표 계산 함수
@@ -245,8 +252,8 @@ with st.sidebar:
 # ==========================================
 if target_query:
     display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
-    if {'query': raw_query, 'display_name': display_name, 'code': ticker_symbol} not in st.session_state.recent_searches:
-        st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name, 'code': ticker_symbol})
+    if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
+        st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
         st.session_state.recent_searches = st.session_state.recent_searches[:5]
 
     with st.spinner(f"📡 '{display_name}' 딥다이브 리포트 생성 중..."):
@@ -339,10 +346,11 @@ if target_query:
                 margin=dict(t=10, b=10, l=0, r=0), 
                 dragmode='pan', hovermode='x unified', showlegend=False
             )
-            # 모바일 좌우 스와이프를 위해 X축은 풀어두고 Y축은 고정
+            
+            # 🌟 좌우 드래그만 허용하도록 고정 (fixedrange 적용)
             fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=False, row=1, col=1)
             fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=False, row=2, col=1)
-            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # 능동 계산된 Y축 적용 (상하 이동 방지)
+            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # 상하 이동 잠금
             fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1) # RSI는 0~100 고정
             
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
@@ -352,8 +360,10 @@ if target_query:
                 obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
                 obv_fig.update_layout(
                     height=350, margin=dict(t=10, b=10, l=0, r=0), 
-                    dragmode='pan', 
+                    dragmode='pan', hovermode='x unified',
                     xaxis=dict(range=[final_start_date, datetime.now()], fixedrange=False),
                     yaxis=dict(fixedrange=True)
                 )
                 st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
+else:
+    st.info("👈 사이드바에서 종목을 검색하거나 내 관심 종목을 클릭하여 분석을 시작하세요.")
