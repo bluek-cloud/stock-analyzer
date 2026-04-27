@@ -37,13 +37,6 @@ st.markdown("---")
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
-# 🌟 누락되었던 관심 종목 세션 초기화 코드 복구!
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = [
-        {'name': '삼성전자', 'code': '005930'},
-        {'name': 'APPLE', 'code': 'AAPL'}
-    ]
-
 # ==========================================
 # 2. 데이터 처리 및 지표 계산 함수
 # ==========================================
@@ -64,7 +57,7 @@ def parse_query(query):
         return f"{query} ({code})", code, query, "원", 0
     return f"{query} (해외)", query, query, "$", 2
 
-def calculate_indicators(df):
+def calculate_indicators(df, rsi_period=14):
     if df.empty or len(df) < 2: return df
     close = df['Close'].squeeze()
     
@@ -73,8 +66,8 @@ def calculate_indicators(df):
     df['MA200'] = close.rolling(window=200).mean()
     
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
     
     exp1 = close.ewm(span=12, adjust=False).mean()
@@ -124,6 +117,7 @@ def detect_patterns_and_levels(df):
 
 @st.cache_data(ttl=60)
 def get_stock_data(code):
+    # RSI 등 지표 계산을 위해 과거 5년치 데이터를 가져오지만 화면 출력은 선택 기간으로 제한함
     start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
@@ -211,37 +205,18 @@ with st.sidebar:
     st.markdown(f"""
     <div class="style-box">
     <b>🔍 분석 모드 가이드</b><br>
-    • <b>단기</b>: 일봉의 미세 파동을 읽어 며칠 내 '반등 타점'을 포착합니다.<br>
-    • <b>장기</b>: <b>주봉(Weekly)</b> 단위로 거대 추세를 읽어 대세 흐름을 판별합니다.
+    • <b>단기</b>: 최근 6개월의 일봉 파동을 읽어 단기 타점을 포착합니다.<br>
+    • <b>장기</b>: 최근 2년의 <b>주봉(Weekly)</b> 대세 흐름을 판별합니다.
     </div>
     """, unsafe_allow_html=True)
+    
+    st.divider()
+    st.subheader("💡 지표 설정")
+    user_rsi_period = st.number_input("RSI 기간", min_value=5, max_value=50, value=14, step=1)
     
     target_query = new_search if run_btn else None
     
     st.divider()
-
-    # 나만의 관심 종목 (Watchlist)
-    st.subheader("⭐ 내 관심 종목")
-    add_col1, add_col2 = st.columns([0.7, 0.3])
-    add_query = add_col1.text_input("추가", label_visibility="collapsed", placeholder="종목 추가")
-    if add_col2.button("추가", use_container_width=True):
-        if add_query:
-            d_name, t_code, r_query, _, _ = parse_query(add_query)
-            if not any(x['code'] == t_code for x in st.session_state.watchlist):
-                st.session_state.watchlist.append({'name': d_name.split(' (')[0], 'code': t_code})
-                st.rerun()
-                
-    for i, stock in enumerate(st.session_state.watchlist):
-        c1, c2 = st.columns([0.8, 0.2])
-        if c1.button(f"🔍 {stock['name']}", key=f"wl_{i}_{stock['code']}", use_container_width=True):
-            target_query = stock['code']
-        if c2.button("❌", key=f"del_{i}_{stock['code']}", use_container_width=True):
-            st.session_state.watchlist.pop(i)
-            st.rerun()
-
-    st.divider()
-
-    # 최근 검색 리스트
     st.subheader("🕒 최근 검색")
     for idx, item in enumerate(st.session_state.recent_searches):
         if st.button(f"▪️ {item['display_name']}", key=f"rs_{idx}_{item['query']}", use_container_width=True):
@@ -267,10 +242,10 @@ if target_query:
         
         if not is_short_term:
             chart_df = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-            chart_df = calculate_indicators(chart_df)
+            chart_df = calculate_indicators(chart_df, rsi_period=user_rsi_period)
             default_days = 730
         else:
-            chart_df = calculate_indicators(raw_df.copy())
+            chart_df = calculate_indicators(raw_df.copy(), rsi_period=user_rsi_period)
             default_days = 180
 
         cur_price = raw_df['Close'].iloc[-1]
@@ -300,25 +275,36 @@ if target_query:
         with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
             for label, key in [("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                 c1, c2 = st.columns([0.25, 0.75])
-                with c1.popover(label, use_container_width=True): st.info(f"**{label}** 상세 설명...")
+                with c1.popover(label, use_container_width=True): st.info(f"**{label}**")
                 c2.markdown(comments.get(key, '데이터 없음'))
             st.divider()
             st.info(comments.get('AI'))
 
         # ==========================================
-        # 🌟 능동 반응형 차트 (Y축 확대 컨트롤 & RSI 하단 결합)
+        # 🌟 모바일 최적화 자동 스케일링 차트 (드래그 완전 차단)
         # ==========================================
-        tab1, tab2 = st.tabs(["📈 주가 & RSI 차트 (좌우 드래그)", "📊 수급 에너지(OBV)"])
+        tab1, tab2 = st.tabs(["📈 주가 & RSI 차트", "📊 수급 에너지(OBV)"])
         
         data_start_date = chart_df.index[0]
         calculated_start_date = datetime.now() - timedelta(days=default_days)
         final_start_date = max(data_start_date, calculated_start_date)
         
-        with tab1:
-            st.markdown("<p style='font-size:0.85em; color:gray; margin-bottom:5px;'>💡 슬라이더를 우측으로 당겨 미세한 캔들 변동성을 크게 확대하세요.</p>", unsafe_allow_html=True)
-            y_zoom = st.slider("세로 변동성 확대 (Y축)", min_value=1.0, max_value=5.0, value=1.0, step=0.5, label_visibility="collapsed")
+        # 🌟 핵심: 표시할 구간(6개월/2년)의 데이터만 추출하여 Y축의 정확한 최고점/최저점 계산
+        visible_df = chart_df[chart_df.index >= final_start_date]
+        if not visible_df.empty:
+            # 캔들의 저점/고점뿐만 아니라 화면에 그려지는 이동평균선 값도 포함하여 잘림 방지
+            min_vals = visible_df[['Low', 'MA20', 'MA60']].min()
+            max_vals = visible_df[['High', 'MA20', 'MA60']].max()
+            c_min = min_vals.min()
+            c_max = max_vals.max()
             
-            # 주가와 RSI를 위아래로 붙이기 위한 서브플롯 생성
+            # 위아래로 2%의 여백(Padding)을 주어 차트가 답답해 보이지 않게 세팅
+            padding = (c_max - c_min) * 0.02
+            y_range = [c_min - padding, c_max + padding]
+        else:
+            y_range = None
+
+        with tab1:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
             
             # Row 1: 주가 및 이동평균선
@@ -326,32 +312,24 @@ if target_query:
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
             
-            # Row 2: RSI 라인 및 과매수/과매도 밴드
+            # Row 2: RSI
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
             fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
-            
-            # Y축 능동적 범위 계산 로직 (선택된 슬라이더 비율에 따라 Y축을 좁혀 변동성을 확대)
-            visible_df = chart_df[chart_df.index >= final_start_date]
-            if not visible_df.empty:
-                c_min, c_max = visible_df['Low'].min(), visible_df['High'].max()
-                c_mid, c_span = (c_max + c_min) / 2, (c_max - c_min) / 2
-                y_range = [c_mid - (c_span / y_zoom) * 1.1, c_mid + (c_span / y_zoom) * 1.1]
-            else:
-                y_range = None
 
             fig.update_layout(
-                height=600, # RSI 공간 확보를 위해 전체 높이 상향
+                height=550, 
                 margin=dict(t=10, b=10, l=0, r=0), 
-                dragmode='pan', hovermode='x unified', showlegend=False
+                dragmode=False, # 🌟 차트 스와이프/이동 완전 차단
+                hovermode='x unified', showlegend=False
             )
             
-            # 🌟 좌우 드래그만 허용하도록 고정 (fixedrange 적용)
-            fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=False, row=1, col=1)
-            fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=False, row=2, col=1)
-            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # 상하 이동 잠금
-            fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1) # RSI는 0~100 고정
+            # 모든 축의 이동 및 확대를 잠금 (fixedrange=True 적용)
+            fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
+            fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
+            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # AI가 계산한 능동적 Y축 여백 적용
+            fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
             
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
             
@@ -360,10 +338,11 @@ if target_query:
                 obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
                 obv_fig.update_layout(
                     height=350, margin=dict(t=10, b=10, l=0, r=0), 
-                    dragmode='pan', hovermode='x unified',
-                    xaxis=dict(range=[final_start_date, datetime.now()], fixedrange=False),
-                    yaxis=dict(fixedrange=True)
+                    dragmode=False, # 차트 이동 차단
+                    hovermode='x unified'
                 )
+                obv_fig.update_xaxes(range=[final_start_date, datetime.now()], fixedrange=True)
+                obv_fig.update_yaxes(fixedrange=True)
                 st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 else:
-    st.info("👈 사이드바에서 종목을 검색하거나 내 관심 종목을 클릭하여 분석을 시작하세요.")
+    st.info("👈 사이드바에서 종목을 검색하여 분석을 시작하세요.")
