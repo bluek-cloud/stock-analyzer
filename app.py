@@ -1,10 +1,10 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
 import requests
 import re
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. 페이지 설정 및 제목
@@ -27,78 +27,66 @@ def get_krx_data():
 def parse_query(query):
     query = query.strip().upper()
     krx_df = get_krx_data()
+    # 🌟 변경: yfinance용 .KS 태그 제거, 순수 6자리 코드만 사용
     if query.isdigit() and len(query) == 6:
         matched = krx_df[krx_df['Code'] == query]
         if not matched.empty:
-            name, market = matched.iloc[0]['Name'], matched.iloc[0]['Market']
-            return f"{name} ({query})", f"{query}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
+            name = matched.iloc[0]['Name']
+            return f"{name} ({query})", query, query
     matched = krx_df[krx_df['Name'] == query]
     if not matched.empty:
-        code, market = matched.iloc[0]['Code'], matched.iloc[0]['Market']
-        return f"{query} ({code})", f"{code}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
+        code = matched.iloc[0]['Code']
+        return f"{query} ({code})", code, query
     return f"{query} (해외/기타)", query, query
 
+# 🌟 완전 개편: 야후 의존성 0%, 100% 네이버 금융 직접 파싱
 @st.cache_data(ttl=3600)
-def get_fundamentals(ticker):
-    sector = 'KOR Equity'
+def get_fundamentals(code):
+    sector = '국내 주식'
     roe, debt_ratio, per, pbr, div_yield, peer_per = None, None, None, None, None, None
     
-    # 1. 야후 파이낸스 (섹터 정보 및 해외 주식 데이터용)
     try:
-        info = yf.Ticker(ticker).info
-        sector = info.get('sector', 'KOR Equity')
-        # 야후 데이터가 있다면 우선 할당
-        roe = info.get('returnOnEquity')
-        if roe is not None: roe = round(roe * 100, 2)
-        debt_ratio = info.get('debtToEquity')
-        if debt_ratio is not None: debt_ratio = round(debt_ratio, 2)
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=5)
+        res.encoding = 'euc-kr' # 한글 깨짐 방지
+        text = res.text
         
-        if not (ticker.endswith('.KS') or ticker.endswith('.KQ')):
-            per = info.get('trailingPE') or info.get('forwardPE')
-            pbr = info.get('priceToBook')
-            div_yield = info.get('dividendYield')
-            if div_yield: div_yield = round(div_yield * 100, 2)
-            peer_per = info.get('trailingPE') 
-    except:
+        per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
+        pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
+        div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
+        peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
+        sector_match = re.search(r'<h4 class="h_sub sub_tit7">\s*<a[^>]*>(.*?)</a>', text)
+        
+        if per_match: per = float(per_match.group(1).replace(',', ''))
+        if pbr_match: pbr = float(pbr_match.group(1).replace(',', ''))
+        if div_match: div_yield = float(div_match.group(1).replace(',', ''))
+        if peer_per_match: peer_per = float(peer_per_match.group(1).replace(',', ''))
+        if sector_match: sector = sector_match.group(1).strip()
+
+        # ROE 및 부채비율 테이블 파싱 (가장 최근 실적 자동 추출)
+        def extract_from_table(label):
+            pattern = rf'<th[^>]*>{label}</th>(.*?)</tr>'
+            row_match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if row_match:
+                tds = re.findall(r'<td[^>]*>(.*?)</td>', row_match.group(1), re.DOTALL)
+                valid_vals = []
+                for td in tds:
+                    clean_str = re.sub(r'<[^>]+>', '', td).strip().replace(',', '')
+                    try:
+                        if clean_str and clean_str != '-':
+                            valid_vals.append(float(clean_str))
+                    except:
+                        pass
+                return valid_vals[-1] if valid_vals else None
+            return None
+
+        roe = extract_from_table(r'ROE\s*\(%\)')
+        debt_ratio = extract_from_table('부채비율')
+        
+    except Exception:
         pass
-
-    # 2. 네이버 금융 (국내 주식용 - 야후 차단 대비 강력한 백업)
-    if ticker.endswith('.KS') or ticker.endswith('.KQ'):
-        try:
-            code = ticker.split('.')[0]
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            res = requests.get(url, headers=headers, timeout=5)
-            res.encoding = 'euc-kr' # 🌟 인코딩 설정 (한글 깨짐 방지)
-            text = res.text
-            
-            # PER, PBR, 배당 등 추출
-            per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
-            pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
-            div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
-            peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
-            
-            if per_match: per = float(per_match.group(1).replace(',', ''))
-            if pbr_match: pbr = float(pbr_match.group(1).replace(',', ''))
-            if div_match: div_yield = float(div_match.group(1).replace(',', ''))
-            if peer_per_match: peer_per = float(peer_per_match.group(1).replace(',', ''))
-
-            # 🌟 ROE 및 부채비율 추출 (표 데이터 파싱)
-            def find_financial_value(label, html_text):
-                pattern = rf'<th>{label}</th>.*?<td>([\d.,\-]+)</td>'
-                match = re.search(pattern, html_text, re.DOTALL)
-                if match:
-                    val = match.group(1).replace(',', '')
-                    return float(val) if val != '-' else None
-                return None
-
-            # 야후 데이터가 실패했을 경우(N/A) 네이버에서 직접 추출
-            if roe is None: roe = find_financial_value('ROE\(%\)', text)
-            if debt_ratio is None: debt_ratio = find_financial_value('부채비율', text)
-            
-        except:
-            pass
-            
+        
     return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
 
 def calculate_indicators(df):
@@ -128,7 +116,6 @@ def calculate_indicators(df):
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
-    # OBV 벡터화 최적화
     direction = (delta > 0).astype(int) - (delta < 0).astype(int)
     df['OBV'] = (vol * direction).cumsum()
     
@@ -178,13 +165,13 @@ def detect_patterns_and_levels(df):
     resistance = df['High'].tail(60).max()
     return patterns, support, resistance
 
+# 🌟 완전 개편: 야후 대신 fdr(한국거래소 기반)로 차트 데이터 로드
 @st.cache_data(ttl=60)
-def get_stock_data(ticker, mode):
-    period = "2y" if "장기" in mode else "1y"
+def get_stock_data(code, mode):
+    days = 730 if "장기" in mode else 365
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
-        df = yf.Ticker(ticker).history(period=period)
-        if df.empty and ticker.endswith('.KS'):
-            df = yf.Ticker(ticker.replace('.KS', '.KQ')).history(period=period)
+        df = fdr.DataReader(code, start=start_date)
         if df.empty: return pd.DataFrame()
         if df.index.tz is not None: df.index = df.index.tz_localize(None)
         return calculate_indicators(df)
@@ -314,11 +301,11 @@ if target_query:
     else:
         cur_price = df['Close'].iloc[-1]
         diff = cur_price - df['Close'].iloc[-2]
-        currency = "원" if cur_price > 1000 else "USD"
+        currency = "원"
         mode_badge = "단기" if "단기" in analyze_mode else "장기"
         
         st.subheader(f"📑 {display_name} 리포트 ({mode_badge})")
-        st.metric("현재 주가", f"{cur_price:,.0f} {currency}" if cur_price > 1000 else f"{cur_price:,.2f} {currency}", f"{diff:,.0f} {currency}")
+        st.metric("현재 주가", f"{cur_price:,.0f} {currency}", f"{diff:,.0f} {currency}")
 
         q_score = calculate_quant_score(df)
         st.write("### 💯 퀀트 매수 매력도 점수")
