@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-import random # 🌟 AI 멘트 다변화를 위한 모듈 추가
+import random
 
 # ==========================================
 # 1. 페이지 설정 및 제목 (모바일 최적화)
@@ -118,7 +118,7 @@ def detect_patterns_and_levels(df):
 
 @st.cache_data(ttl=60)
 def get_stock_data(code):
-    # 🌟 줌 아웃(확장 탐색)을 위해 기본적으로 5년치(1825일) 데이터를 한 번에 로드
+    # 🌟 5년치(1825일) 데이터를 한 번에 로드 (자유 탐색 지원)
     start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
@@ -127,7 +127,7 @@ def get_stock_data(code):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 🌟 궁극의 AI 엔진 탑재: 지지/저항 및 다이버전스 분석 포함
+# 🌟 고도화된 AI 엔진: 분석과 포지션의 100% 동기화
 def generate_signal_and_comments(df, mode, sup, res):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -145,16 +145,14 @@ def generate_signal_and_comments(df, mode, sup, res):
 
     comments = {}
     
-    # 기본 지표 설명 세팅
+    # 지표 상세 코멘트
     if pd.isna(rsi): comments['RSI'] = "데이터 부족"
     elif rsi >= 70: comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 지수가 70을 넘어 단기 과열권입니다. 수익 실현을 고려할 시점입니다."
     elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하로 공포 구간입니다. 기술적 반등 가능성이 매우 높습니다."
     else: comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 매수/매도세가 균형을 이루고 있습니다."
 
-    if macd > signal:
-        comments['MACD'] = "🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
-    else:
-        comments['MACD'] = "⚠️ **하락 추세**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
+    if macd > signal: comments['MACD'] = "🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
+    else: comments['MACD'] = "⚠️ **하락 추세**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
 
     obv_status = "상승" if obv > prev_obv else "하락"
     comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 평소 대비 유의미한 거래 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래가 이뤄지고 있습니다."
@@ -163,90 +161,81 @@ def generate_signal_and_comments(df, mode, sup, res):
     volatility_pct = (atr / close) * 100
     comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({int(atr):,}원)** 정도의 변동폭을 보이며 움직이고 있습니다."
 
-    # 포지션 설정
-    position, reason = "⚖️ 관망", "주요 지표의 방향성이 엇갈리고 있습니다."
-    t_buy, t_sell, s_loss = close * 0.95, close * 1.05, close * 0.90
-    
-    if rsi < 40 and macd > signal:
-        position, reason = "🔴 적극 매수", f"RSI({rsi:.1f}) 저평가 구간에서 MACD 골든크로스가 발생했습니다."
-    elif rsi > 70 and macd < signal:
-        position, reason = "🔷 적극 매도", f"RSI({rsi:.1f}) 과열권에서 추세가 꺾이기 시작했습니다."
+    # ==========================================
+    # 🤖 AI 딥다이브 조건 도출 (다이버전스 & 지지/저항)
+    # ==========================================
+    dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
+    dist_to_res = (res - close) / res * 100 if res > 0 else 100
+    near_sup = dist_to_sup <= 5
+    near_res = dist_to_res <= 5
 
-    # ==========================================
-    # 🤖 AI 딥다이브 분석 엔진 (LLM급 알고리즘)
-    # ==========================================
-    intro = random.choice([
-        "🤖 **StockMap AI 심층 분석 리포트**\n\n",
-        "🧠 **StockMap AI 퀀트 다이그노스틱**\n\n",
-        "📊 **StockMap AI 알고리즘 종합 판단**\n\n"
-    ])
-    
-    # 1. Price Action (지지/저항 융합 분석)
-    dist_to_sup = (close - sup) / sup * 100
-    dist_to_res = (res - close) / res * 100
-    
-    sr_text = ""
-    if dist_to_sup <= 5:
-        sr_text = random.choice([
-            f"현재 주가는 심리적 주요 지지선(**{sup:,.0f}원**)에 매우 근접(이격도 {dist_to_sup:.1f}%)해 있습니다. 하방 경직성이 강하게 확보될 가능성이 높은 매력적인 자리입니다. ",
-            f"주요 지지 레벨(**{sup:,.0f}원**) 부근에서 바닥 다지기가 진행 중입니다. 손절폭이 매우 짧아 신규 진입하기에 '가성비'가 뛰어난 구간으로 분석됩니다. "
-        ])
-    elif dist_to_res <= 5:
-        sr_text = random.choice([
-            f"현재 주가는 강력한 저항선(**{res:,.0f}원**)에 바짝 다가섰습니다(이격도 {dist_to_res:.1f}%). 이 구간의 완벽한 돌파 여부가 향후 단기 랠리를 결정지을 핵심 변수입니다. ",
-            f"저항대(**{res:,.0f}원**) 돌파를 앞두고 치열한 매물 소화 과정이 관찰됩니다. 단번에 돌파하지 못할 경우 단기 차익 매물이 쏟아질 수 있습니다. "
-        ])
-    
-    # 2. 고급 패턴: 다이버전스 (Divergence) 분석
-    div_text = ""
     price_down = close < prev20_close
     price_up = close > prev20_close
     obv_up = obv > prev20_obv
     rsi_up = rsi > prev20_rsi
     
-    if price_down and (obv_up or rsi_up):
-        div_text = random.choice([
-            "🔥 **[히든 시그널: 상승 다이버전스]** 겉보기엔 주가가 눌리고 있으나, 내부 보조지표(OBV/RSI)는 오히려 저점을 높이고 있습니다. 이는 세력의 '숨은 매집'을 암시하며 조만간 위로 크게 방향을 틀 확률이 큽니다. ",
-            "💡 **[핵심 포착]** 가격은 하락/횡보 중인데 매수 에너지는 축적되는 전형적인 '상승 다이버전스' 현상이 포착되었습니다. 주가의 추세 반전이 임박했습니다. "
-        ])
-    elif price_up and (not obv_up or not rsi_up):
-        div_text = random.choice([
-            "⚠️ **[위험 신호: 하락 다이버전스]** 주가는 오르고 있지만 거래 수급이나 펀더멘탈 강도는 뒤따라오지 못하고 있습니다. 일명 '가짜 상승(속임수)'일 가능성이 있으니 강한 경계가 필요합니다. ",
-            "🚨 **[주의 요망]** 표면적인 상승 추세와 달리 내부 에너지가 이탈하는 '하락 다이버전스'가 감지되었습니다. 추격 매수는 자칫 고점에 물릴 수 있는 매우 위험한 자리입니다. "
-        ])
+    bullish_div = price_down and (obv_up or rsi_up)
+    bearish_div = price_up and (not obv_up or not rsi_up)
 
-    # 3. 텍스트 조합
-    ai_opinion = intro + sr_text + div_text
+    # 🌟 개선: 포지션 결정을 지지/저항/다이버전스와 완벽히 일치시킴
+    position, reason = "⚖️ 관망", "주요 지표의 방향성이 혼재되어 명확한 돌파/지지가 필요합니다."
+    t_buy, t_sell, s_loss = close * 0.95, close * 1.05, close * 0.90
     
+    if (rsi < 40 and macd > signal) or (near_sup and bullish_div):
+        position, reason = "🔴 적극 매수", "강력한 반등 신호(상승 다이버전스 또는 지지선 부근)가 포착되었습니다."
+    elif (rsi > 70 and macd < signal) or (near_res and bearish_div):
+        position, reason = "🔷 적극 매도", "강한 고점 징후(하락 다이버전스 또는 저항선 부근)가 포착되었습니다."
+    elif bullish_div or (macd > signal and vol_ratio > 120 and obv > prev_obv):
+        position, reason = "🟠 분할 매수", "긍정적인 매수 수급과 단기 상승 모멘텀이 확인됩니다."
+    elif bearish_div or (macd < signal and vol_ratio > 120 and obv < prev_obv):
+        position, reason = "🔵 비중 축소", "매도 우위 수급과 단기 하락 모멘텀이 포착됩니다."
+
+    # ==========================================
+    # 🤖 AI 코멘트 작성 (결정된 포지션과 논리 동기화)
+    # ==========================================
+    ai_opinion = random.choice([
+        "🤖 **StockMap AI 심층 분석 리포트**\n\n",
+        "🧠 **StockMap AI 퀀트 다이그노스틱**\n\n"
+    ])
+    
+    sr_text, div_text, trend_text = "", "", ""
+    
+    if near_sup:
+        sr_text = f"현재 주가는 심리적 주요 지지선(**{sup:,.0f}원**)에 매우 근접(이격도 {dist_to_sup:.1f}%)해 있습니다. 하방 경직성이 강하게 확보될 가능성이 높은 매력적인 자리입니다. "
+    elif near_res:
+        sr_text = f"현재 주가는 강력한 저항선(**{res:,.0f}원**)에 바짝 다가섰습니다(이격도 {dist_to_res:.1f}%). 이 구간의 완벽한 돌파 여부가 향후 단기 랠리를 결정지을 핵심 변수입니다. "
+    
+    if bullish_div:
+        div_text = "💡 **[핵심 포착: 상승 다이버전스]** 겉보기엔 가격이 눌리고 있으나 내부 보조지표(OBV/RSI)는 상승하는 현상이 포착되었습니다. 세력의 '숨은 매집'을 암시하며 주가의 상방 턴어라운드가 임박했습니다. "
+    elif bearish_div:
+        div_text = "⚠️ **[위험 신호: 하락 다이버전스]** 주가는 오르고 있지만 거래 수급이나 펀더멘탈 강도는 뒤따라오지 못하고 있습니다. 일명 '가짜 상승(속임수)'일 가능성이 있으니 강한 경계가 필요합니다. "
+
     if not sr_text and not div_text:
-         ai_opinion += f"현재 주가는 지지선(**{sup:,.0f}원**)과 저항선(**{res:,.0f}원**) 사이의 밴드 내에서 안정적인 흐름을 이어가고 있습니다. "
-         if macd > signal:
-             ai_opinion += "MACD 지표가 시그널선을 상회하며 점진적인 우상향 모멘텀을 모색하는 단계로 평가됩니다. "
-         else:
-             ai_opinion += "MACD 데드크로스의 여파로 뚜렷한 방향성을 상실한 채 에너지를 비축하는 휴식 국면입니다. "
+        if macd > signal:
+            trend_text = "현재 뚜렷한 특이 패턴(다이버전스 등)은 없으나, MACD 시그널을 상회하며 점진적인 우상향 모멘텀을 모색하는 단계로 평가됩니다. "
+        else:
+            trend_text = "현재 큰 모멘텀 없이 MACD 데드크로스 하에서 에너지를 비축하거나 조정을 거치는 휴식 국면입니다. "
 
+    ai_opinion += sr_text + div_text + trend_text
+
+    # 거래량 모멘텀 평가
     if vol_ratio >= 150:
-         ai_opinion += random.choice([
-             f"\n\n특히 눈에 띄는 점은 최근 평소 대비 **{vol_ratio:.0f}%에 달하는 폭발적 거래량**이 유입되었다는 것입니다. 이는 시장의 강력한 주목을 받고 있다는 증거로, 현재의 추세를 가속화할 강력한 촉매제입니다.",
-             f"\n\n여기에 거래량이 **{vol_ratio:.0f}% 수준으로 급증**한 점이 매우 고무적입니다. 스마트 머니(큰 손)의 개입이나 주요 재료 노출이 의심되니 변동성에 적극적으로 편승할 준비가 필요합니다."
-         ])
+        if "매수" in position:
+            ai_opinion += f"\n\n특히 평소 대비 **{vol_ratio:.0f}%에 달하는 폭발적 대량 거래량**이 상승 추세를 뒷받침하고 있어, 대규모 자금 유입과 강력한 돌파 모멘텀이 발생했을 확률이 높습니다."
+        else:
+            ai_opinion += f"\n\n주의할 점은 거래량이 **{vol_ratio:.0f}% 급증**했음에도 하방 압력이나 저항이 강하다는 것입니다. 강력한 매도 물량 출회 및 추세 이탈 가능성을 열어두어야 합니다."
 
-    # 4. 결론 (투자 의견)
-    if "매수" in position:
-        ai_opinion += random.choice([
-            "\n\n🎯 **최종 퀀트 전략:** 전반적인 보조지표들이 바닥권 탈출과 강세 전환을 한목소리로 지지하고 있습니다. **현 구간에서의 적극적인 분할 매수**는 통계적으로 승률이 매우 뛰어난 전략입니다.",
-            "\n\n🎯 **최종 퀀트 전략:** 상승 랠리를 향한 퍼즐 조각들이 완벽히 맞춰지고 있습니다. **비중을 과감히 늘려가는 공세적인 포지션 구축**을 강력히 권장합니다."
-        ])
-    elif "매도" in position:
-        ai_opinion += random.choice([
-            "\n\n🎯 **최종 퀀트 전략:** 단기 과열 및 상승 추세 이탈 징후가 곳곳에서 감지됩니다. **신규 진입을 철저히 배제하고, 기존 보유 물량은 차익 실현**을 통해 계좌의 리스크를 방어하십시오.",
-            "\n\n🎯 **최종 퀀트 전략:** 하방 압력이 거세질 수 있는 불안정한 위치입니다. **현금 비중을 대폭 늘리고 시장의 소나기를 피하는 보수적 접근**이 절대적으로 필요합니다."
-        ])
+    # 🌟 최종 결론 (포지션 변수와 정확히 매칭)
+    if position == "🔴 적극 매수":
+        ai_opinion += "\n\n🎯 **최종 퀀트 전략:** 바닥권 탈출 및 강세 전환을 지지하는 지표들이 동시다발적으로 발생했습니다. **현 구간에서 적극적인 진입 및 비중 확대**를 강력히 권장합니다."
+    elif position == "🟠 분할 매수":
+        ai_opinion += "\n\n🎯 **최종 퀀트 전략:** 긍정적인 에너지가 축적되며 상승 턴어라운드가 기대되는 시점입니다. **안정적인 분할 매수로 접근하며 상승 흐름에 편승**하기 좋은 위치입니다."
+    elif position == "🔷 적극 매도":
+        ai_opinion += "\n\n🎯 **최종 퀀트 전략:** 단기 고점 징후 및 추세 이탈 시그널이 강하게 포착되었습니다. **신규 진입을 철저히 배제하고 보유 물량은 즉각적인 차익 실현(리스크 관리)**이 필요합니다."
+    elif position == "🔵 비중 축소":
+        ai_opinion += "\n\n🎯 **최종 퀀트 전략:** 상승 탄력이 둔화되고 매도 우위 수급이 포착됩니다. **추가 매수를 자제하고 리스크 관리를 위해 비중 축소**를 고려해 볼 만한 구간입니다."
     else:
-        ai_opinion += random.choice([
-            "\n\n🎯 **최종 퀀트 전략:** 상승과 하락 신호가 혼재되어 시장이 뚜렷한 답을 주지 않고 있습니다. **명확한 지지선 방어나 저항선 돌파가 확인될 때까지 관망**하는 것이 가장 훌륭한 투자입니다.",
-            "\n\n🎯 **최종 퀀트 전략:** 현재는 폭발을 위해 에너지를 응축하는 지루한 횡보 구간입니다. **무리하게 배팅하기보다는 관망**하며 다음 결정적인 시그널을 기다리시길 바랍니다."
-        ])
+        ai_opinion += "\n\n🎯 **최종 퀀트 전략:** 상승/하락 에너지가 혼재되어 뚜렷한 방향성이 나타나지 않고 있습니다. **확실한 지지선 방어나 저항선 돌파가 확인될 때까지 무리한 배팅을 자제하고 관망**하시길 바랍니다."
 
     comments['AI'] = ai_opinion
     return position, t_buy, t_sell, s_loss, reason, rsi, atr, comments
@@ -256,7 +245,7 @@ def generate_signal_and_comments(df, mode, sup, res):
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정")
-    analyze_mode = st.radio("투자 성향 (초기 차트 뷰)", ["단기/스윙 (6개월)", "장기 투자 (2년)"])
+    analyze_mode = st.radio("초기 차트 뷰", ["단기/스윙 (6개월)", "장기 투자 (2년)"])
     new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, 005930 등")
     target_query = new_search if st.button("🚀 분석 실행", type="primary", use_container_width=True) else None
     st.divider()
@@ -286,7 +275,6 @@ if target_query:
         st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
         st.progress(q_score / 100)
 
-        # 🌟 지지/저항을 먼저 뽑아내어 AI 코멘트에 전달
         pts, sup, res = detect_patterns_and_levels(df)
         pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode, sup, res)
         
@@ -305,7 +293,6 @@ if target_query:
                 st.write(f"🛡️ **지지:** {sup:,.0f} | 🚧 **저항:** {res:,.0f}")
 
         with st.expander("🔬 지표별 상세 수치 분석", expanded=True):
-            # 팝오버를 통한 개념 설명 및 우측 수치 출력
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("상대 거래량", use_container_width=True):
                 st.info("**상대 거래량(Relative Volume)**\n\n최근 5일 평균 거래량 대비 오늘 거래량이 얼마나 터졌는지를 나타냅니다. 150~200% 이상이면 세력 유입이나 강한 추세 변화의 신호로 봅니다.")
@@ -333,16 +320,15 @@ if target_query:
             
             st.divider()
             
-            # 🌟 궁극의 AI 분석 리포트 출력 구역
+            # 궁극의 AI 분석 리포트 출력 구역
             st.info(comments.get('AI'))
 
         # ==========================================
         # 🌟 5년 전체 탐색 지원 핀치 줌 차트 세팅
         # ==========================================
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
-        chart_df = df # 데이터 자르기(.tail) 없이 5년 치 통째로 매핑
+        chart_df = df # 데이터 자르기(.tail) 없이 5년 치 통째로 전달
         
-        # 사용자의 투자 성향에 따라 초기 뷰포트(줌 레벨) 설정
         view_days = 180 if "단기" in analyze_mode else 730
         initial_start = datetime.now() - timedelta(days=view_days)
         initial_end = datetime.now()
@@ -355,16 +341,16 @@ if target_query:
             fig.update_layout(
                 height=450, 
                 xaxis=dict(
-                    range=[initial_start, initial_end], # 초기엔 6개월/2년만 보임 (손가락으로 줌아웃 시 5년 탐색 가능)
+                    range=[initial_start, initial_end], 
                     rangeslider=dict(visible=False)
                 ),
                 margin=dict(t=10, b=10, l=0, r=0),
-                dragmode='pan', # 모바일 친화적 드래그
+                dragmode='pan', 
                 hovermode='x unified'
             )
             
             st.plotly_chart(fig, use_container_width=True, config={
-                'scrollZoom': True, # 핀치 줌 완벽 지원
+                'scrollZoom': True, 
                 'displayModeBar': False,
                 'doubleClick': 'reset+autosize'
             })
@@ -373,7 +359,7 @@ if target_query:
             obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
             obv_fig.update_layout(
                 height=350, 
-                xaxis=dict(range=[initial_start, initial_end]), # 위 차트와 뷰포트 동기화
+                xaxis=dict(range=[initial_start, initial_end]), 
                 margin=dict(t=10, b=10, l=0, r=0), 
                 dragmode='pan'
             )
