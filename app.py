@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
-# 🌟 다크 테마/라이트 테마 모두에서 글씨가 잘 보이도록 반투명 스타일 적용
+# 🌟 수정: 모바일 환경 여백 조정 및 다크/라이트 테마 모두에서 주가 가독성을 높이는 CSS
 st.markdown("""
     <style>
     .reportview-container .main .block-container { padding-top: 1rem; }
-    [data-testid="stMetric"] { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
+    [data-testid="stMetric"] { background-color: rgba(128, 128, 128, 0.1); padding: 10px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -117,8 +117,7 @@ def detect_patterns_and_levels(df):
 
 @st.cache_data(ttl=60)
 def get_stock_data(code, mode):
-    # 🌟 줌 아웃(확장 탐색)을 위해 기본적으로 5년치(1825일)를 백그라운드에 로드합니다.
-    days = 1825
+    days = 730 if "장기" in mode else 365
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
@@ -127,7 +126,6 @@ def get_stock_data(code, mode):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 🌟 수정: 불필요하게 복잡했던 MACD 수치 제거 및 ATR 천 단위 콤마 추가
 def generate_signal_and_comments(df, mode):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -147,18 +145,19 @@ def generate_signal_and_comments(df, mode):
     elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하로 공포 구간입니다. 기술적 반등 가능성이 매우 높습니다."
     else: comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 매수/매도세가 균형을 이루고 있습니다."
 
-    # 🌟 MACD 복잡한 수치 제거 및 심플한 방향성 제시
+    # MACD 상세 분석
+    macd_diff = macd - signal
     if macd > signal:
-        comments['MACD'] = f"🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
+        comments['MACD'] = f"🚀 **상승 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
     else:
-        comments['MACD'] = f"⚠️ **하락 추세**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
+        comments['MACD'] = f"⚠️ **하락 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
 
     # 거래량 및 OBV 상세 분석
     obv_status = "상승" if obv > prev_obv else "하락"
     comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 평소 거래량 대비 유의미한 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래가 이뤄지고 있습니다."
     comments['OBV'] = f"🕵️‍♂️ **매집 확인**: 최근 5일간 누적 OBV가 {obv_status}하며 자금이 유입되는 흐름입니다."
 
-    # 🌟 ATR 원 단위 콤마(,) 적용
+    # 변동성 상세 분석
     volatility_pct = (atr / close) * 100
     comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({int(atr):,}원)** 정도의 변동폭을 보이며 움직이고 있습니다."
 
@@ -170,6 +169,37 @@ def generate_signal_and_comments(df, mode):
         position, reason = "🔴 적극 매수", f"RSI({rsi:.1f}) 저평가 구간에서 MACD 골든크로스가 발생했습니다."
     elif rsi > 70 and macd < signal:
         position, reason = "🔷 적극 매도", f"RSI({rsi:.1f}) 과열권에서 추세가 꺾이기 시작했습니다."
+
+    # 🌟 신규: LLM에 준하는 알고리즘 기반 AI 분석 코멘트 생성
+    ai_opinion = "🤖 **StockMap AI 종합 분석**\n\n"
+    
+    if rsi >= 70:
+        ai_opinion += f"현재 주가는 RSI {rsi:.1f}로 **강한 과매수(과열) 구간**에 진입해 있습니다. "
+    elif rsi <= 30:
+        ai_opinion += f"현재 주가는 RSI {rsi:.1f}로 **극심한 과매도(침체) 구간**에 위치하여 반등 에너지가 응축되고 있습니다. "
+    else:
+        ai_opinion += f"현재 주가는 RSI {rsi:.1f}로 매수세와 매도세가 팽팽한 **안정적인 횡보/추세 구간**을 지나고 있습니다. "
+
+    macd_trend = "상승 추세" if macd > signal else "하락 추세"
+    if vol_ratio >= 150:
+        if macd > signal:
+            ai_opinion += f"특히 최근 평소 대비 **{vol_ratio:.0f}%에 달하는 폭발적인 대량 거래량**이 터지면서 MACD {macd_trend}를 강하게 뒷받침하고 있어, 대규모 자금 유입과 강력한 상승 모멘텀이 발생했을 확률이 높습니다. "
+        else:
+            ai_opinion += f"주의할 점은 거래량이 **{vol_ratio:.0f}% 급증**했음에도 불구하고 MACD 지표가 {macd_trend}를 가리키고 있어, 강력한 매도 물량이 출회되었거나 기존 추세를 이탈하고 있을 위험성이 큽니다. "
+    else:
+        if macd > signal:
+            ai_opinion += f"MACD 지표상 시그널선을 상회하는 **{macd_trend}**가 유지되고 있으며, 누적 수급(OBV) 또한 {obv_status} 곡선을 그리고 있어 급등보다는 점진적이고 건강한 우상향 추세가 기대됩니다. "
+        else:
+            ai_opinion += f"MACD 지표가 시그널선을 하회하는 **{macd_trend}**가 이어지고 있으며, 거래량의 폭발적인 유입 없이 누적 수급(OBV)도 {obv_status} 중이므로 당분간 지루한 조정 국면이 불가피해 보입니다. "
+
+    if "매수" in position:
+        ai_opinion += "\n\n💡 **AI 전략:** 모든 핵심 지표들이 바닥권 탈출 및 강한 상승 전환을 가리키고 있습니다. **현재 구간에서 적극적인 분할 매수**로 접근하는 전략을 긍정적으로 평가합니다."
+    elif "매도" in position:
+        ai_opinion += "\n\n💡 **AI 전략:** 지표들이 단기 고점을 알리며 추세 이탈을 강하게 경고하고 있습니다. **신규 진입은 최대한 자제하고, 보유자는 리스크 관리 및 차익 실현**을 고려할 시점입니다."
+    else:
+        ai_opinion += "\n\n💡 **AI 전략:** 현재는 상승과 하락 신호가 혼재되어 뚜렷한 방향성을 확신하기 어려운 구간입니다. **확실한 추세가 형성될 때까지 관망**하며 주요 지지선 이탈 여부를 확인하는 보수적 접근을 권장합니다."
+
+    comments['AI'] = ai_opinion
 
     return position, t_buy, t_sell, s_loss, reason, rsi, atr, comments
 
@@ -226,40 +256,40 @@ if target_query:
                 st.write(f"🛡️ **지지:** {sup:,.0f} | 🚧 **저항:** {res:,.0f}")
 
         with st.expander("🔬 지표별 상세 수치 분석", expanded=True):
-            # 아이콘 없이 텍스트(개념)를 누르면 설명이 표시되도록 유지
+            # 🌟 수정: ? 아이콘을 제거하고 지표 이름 자체를 팝오버(설명 버튼)로 변경
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("상대 거래량", use_container_width=True):
                 st.info("**상대 거래량(Relative Volume)**\n\n최근 5일 평균 거래량 대비 오늘 거래량이 얼마나 터졌는지를 나타냅니다. 150~200% 이상이면 세력 유입이나 강한 추세 변화의 신호로 봅니다.")
-            c2.markdown(comments.get('VOL', '데이터 없음'))
+            c2.markdown(comments.get('VOL'))
             
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("OBV 누적", use_container_width=True):
                 st.info("**OBV(On-Balance Volume)**\n\n거래량은 주가에 선행한다는 원리를 이용한 지표입니다. 주가가 하락해도 OBV가 상승하면 '숨은 매집'으로 판단하며, 반대의 경우 '이탈 징후'로 봅니다.")
-            c2.markdown(comments.get('OBV', '데이터 없음'))
+            c2.markdown(comments.get('OBV'))
             
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("RSI 강도", use_container_width=True):
                 st.info("**RSI(상대강도지수)**\n\n주가의 상승 압력과 하락 압력 간의 상대적 강도를 나타냅니다. 70 이상은 '과매수(거품)', 30 이하는 '과매도(저평가)' 구간으로 해석합니다.")
-            c2.markdown(comments.get('RSI', '데이터 없음'))
+            c2.markdown(comments.get('RSI'))
             
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("MACD 흐름", use_container_width=True):
                 st.info("**MACD(이동평균 수렴확산)**\n\n단기 추세선과 장기 추세선이 얼마나 가까워지고 멀어지는지를 측정합니다. 골든크로스가 발생하면 상승 추세의 시작으로 봅니다.")
-            c2.markdown(comments.get('MACD', '데이터 없음'))
+            c2.markdown(comments.get('MACD'))
             
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("ATR 변동성", use_container_width=True):
                 st.info("**ATR(평균 실변동폭)**\n\n일정 기간 동안 주가가 얼마나 '출렁'거렸는지 변동성을 보여줍니다. ATR이 높을수록 주가가 급등락하기 쉬우므로 위험 관리가 필요합니다.")
-            c2.markdown(comments.get('ATR', '데이터 없음'))
+            c2.markdown(comments.get('ATR'))
+            
+            st.divider()
+            
+            # 🌟 신규: 종합 AI 분석 코멘트 출력 영역
+            st.info(comments.get('AI'))
 
-        # 🌟 스마트폰용 핀치 줌 및 자유 탐색 지원 차트
+        # 스마트폰용 핀치 줌 지원 차트
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
-        chart_df = df # 5년 치의 전체 데이터를 차트에 매핑
-        
-        # 사용자가 선택한 성향(6개월 or 2년)에 맞게 초기 화면의 줌(Zoom) 설정
-        view_days = 180 if "단기" in analyze_mode else 730
-        initial_start = datetime.now() - timedelta(days=view_days)
-        initial_end = datetime.now()
+        chart_df = df.tail(100)
         
         with tab1:
             fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
@@ -268,10 +298,7 @@ if target_query:
             
             fig.update_layout(
                 height=450, 
-                xaxis=dict(
-                    range=[initial_start, initial_end], # 초기 보여주는 범위 지정
-                    rangeslider=dict(visible=False)
-                ),
+                xaxis_rangeslider_visible=False, 
                 margin=dict(t=10, b=10, l=0, r=0),
                 dragmode='pan', # 모바일 드래그 이동 우선
                 hovermode='x unified'
@@ -285,10 +312,5 @@ if target_query:
             
         with tab2:
             obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-            obv_fig.update_layout(
-                height=350, 
-                xaxis=dict(range=[initial_start, initial_end]), # 수급 차트도 초기 범위 동기화
-                margin=dict(t=10, b=10, l=0, r=0), 
-                dragmode='pan'
-            )
+            obv_fig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan')
             st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
