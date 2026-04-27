@@ -9,12 +9,11 @@ from datetime import datetime, timedelta
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
-# 모바일 환경에서 상단 여백 조정 및 다크모드 대응 CSS 수정
+# 🌟 다크 테마/라이트 테마 모두에서 글씨가 잘 보이도록 반투명 스타일 적용
 st.markdown("""
     <style>
     .reportview-container .main .block-container { padding-top: 1rem; }
-    /* 다크/라이트 테마 모두에서 가독성을 높이도록 반투명 배경과 테두리 적용 */
-    [data-testid="stMetric"] { background-color: rgba(128, 128, 128, 0.1); padding: 10px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
+    [data-testid="stMetric"] { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -118,7 +117,8 @@ def detect_patterns_and_levels(df):
 
 @st.cache_data(ttl=60)
 def get_stock_data(code, mode):
-    days = 730 if "장기" in mode else 365
+    # 🌟 줌 아웃(확장 탐색)을 위해 기본적으로 5년치(1825일)를 백그라운드에 로드합니다.
+    days = 1825
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
@@ -127,7 +127,7 @@ def get_stock_data(code, mode):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 수치를 포함한 상세 분석 로직
+# 🌟 수정: 불필요하게 복잡했던 MACD 수치 제거 및 ATR 천 단위 콤마 추가
 def generate_signal_and_comments(df, mode):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -147,21 +147,20 @@ def generate_signal_and_comments(df, mode):
     elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하로 공포 구간입니다. 기술적 반등 가능성이 매우 높습니다."
     else: comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 매수/매도세가 균형을 이루고 있습니다."
 
-    # MACD 상세 분석
-    macd_diff = macd - signal
+    # 🌟 MACD 복잡한 수치 제거 및 심플한 방향성 제시
     if macd > signal:
-        comments['MACD'] = f"🚀 **상승 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
+        comments['MACD'] = f"🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
     else:
-        comments['MACD'] = f"⚠️ **하락 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
+        comments['MACD'] = f"⚠️ **하락 추세**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
 
     # 거래량 및 OBV 상세 분석
     obv_status = "상승" if obv > prev_obv else "하락"
     comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 평소 거래량 대비 유의미한 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래가 이뤄지고 있습니다."
     comments['OBV'] = f"🕵️‍♂️ **매집 확인**: 최근 5일간 누적 OBV가 {obv_status}하며 자금이 유입되는 흐름입니다."
 
-    # 변동성 상세 분석
+    # 🌟 ATR 원 단위 콤마(,) 적용
     volatility_pct = (atr / close) * 100
-    comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({int(atr)}원)** 정도의 변동폭을 보이며 움직이고 있습니다."
+    comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({int(atr):,}원)** 정도의 변동폭을 보이며 움직이고 있습니다."
 
     # 매매 전략 결정
     position, reason = "⚖️ 관망", "주요 지표의 방향성이 엇갈리고 있습니다."
@@ -227,7 +226,7 @@ if target_query:
                 st.write(f"🛡️ **지지:** {sup:,.0f} | 🚧 **저항:** {res:,.0f}")
 
         with st.expander("🔬 지표별 상세 수치 분석", expanded=True):
-            # 🌟 아이콘을 제거하고 지표 이름을 버튼화하여 클릭 시 설명 표시
+            # 아이콘 없이 텍스트(개념)를 누르면 설명이 표시되도록 유지
             c1, c2 = st.columns([0.2, 0.8])
             with c1.popover("상대 거래량", use_container_width=True):
                 st.info("**상대 거래량(Relative Volume)**\n\n최근 5일 평균 거래량 대비 오늘 거래량이 얼마나 터졌는지를 나타냅니다. 150~200% 이상이면 세력 유입이나 강한 추세 변화의 신호로 봅니다.")
@@ -253,9 +252,14 @@ if target_query:
                 st.info("**ATR(평균 실변동폭)**\n\n일정 기간 동안 주가가 얼마나 '출렁'거렸는지 변동성을 보여줍니다. ATR이 높을수록 주가가 급등락하기 쉬우므로 위험 관리가 필요합니다.")
             c2.markdown(comments.get('ATR', '데이터 없음'))
 
-        # 스마트폰용 핀치 줌 지원 차트
+        # 🌟 스마트폰용 핀치 줌 및 자유 탐색 지원 차트
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
-        chart_df = df.tail(100)
+        chart_df = df # 5년 치의 전체 데이터를 차트에 매핑
+        
+        # 사용자가 선택한 성향(6개월 or 2년)에 맞게 초기 화면의 줌(Zoom) 설정
+        view_days = 180 if "단기" in analyze_mode else 730
+        initial_start = datetime.now() - timedelta(days=view_days)
+        initial_end = datetime.now()
         
         with tab1:
             fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
@@ -264,7 +268,10 @@ if target_query:
             
             fig.update_layout(
                 height=450, 
-                xaxis_rangeslider_visible=False, 
+                xaxis=dict(
+                    range=[initial_start, initial_end], # 초기 보여주는 범위 지정
+                    rangeslider=dict(visible=False)
+                ),
                 margin=dict(t=10, b=10, l=0, r=0),
                 dragmode='pan', # 모바일 드래그 이동 우선
                 hovermode='x unified'
@@ -278,5 +285,10 @@ if target_query:
             
         with tab2:
             obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-            obv_fig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan')
+            obv_fig.update_layout(
+                height=350, 
+                xaxis=dict(range=[initial_start, initial_end]), # 수급 차트도 초기 범위 동기화
+                margin=dict(t=10, b=10, l=0, r=0), 
+                dragmode='pan'
+            )
             st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
