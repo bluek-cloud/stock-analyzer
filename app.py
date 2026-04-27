@@ -40,6 +40,11 @@ def parse_query(query):
 
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
+    # 변수 초기화
+    sector = 'KOR Equity'
+    roe, debt_ratio, per, pbr, div_yield, peer_per = None, None, None, None, None, None
+    
+    # 🌟 최적화 1: 야후 파이낸스 크롤링 (독립 예외처리)
     try:
         info = yf.Ticker(ticker).info
         sector = info.get('sector', 'KOR Equity')
@@ -50,11 +55,23 @@ def get_fundamentals(ticker):
         debt_ratio = info.get('debtToEquity')
         if debt_ratio is not None: debt_ratio = round(debt_ratio, 2)
         
-        if ticker.endswith('.KS') or ticker.endswith('.KQ'):
+        if not (ticker.endswith('.KS') or ticker.endswith('.KQ')):
+            per = info.get('trailingPE') or info.get('forwardPE')
+            pbr = info.get('priceToBook')
+            div_yield = info.get('dividendYield')
+            if div_yield: div_yield = round(div_yield * 100, 2)
+            peer_per = info.get('trailingPE') 
+    except Exception:
+        pass # 에러 발생 시 무시하고 다음 단계로 진행
+
+    # 🌟 최적화 2: 네이버 금융 크롤링 (독립 예외처리 및 타임아웃 적용)
+    if ticker.endswith('.KS') or ticker.endswith('.KQ'):
+        try:
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            # timeout=5 설정으로 무한 대기 프리징 방지
+            res = requests.get(url, headers=headers, timeout=5) 
             text = res.text
             
             per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
@@ -62,22 +79,14 @@ def get_fundamentals(ticker):
             div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
             peer_per_match = re.search(r'동일업종 PER.*?<em>([\d.,]+)</em>', text, re.DOTALL)
             
-            per = float(per_match.group(1).replace(',', '')) if per_match else None
-            pbr = float(pbr_match.group(1).replace(',', '')) if pbr_match else None
-            div_yield = float(div_match.group(1).replace(',', '')) if div_match else None
-            peer_per = float(peer_per_match.group(1).replace(',', '')) if peer_per_match else None
+            if per_match: per = float(per_match.group(1).replace(',', ''))
+            if pbr_match: pbr = float(pbr_match.group(1).replace(',', ''))
+            if div_match: div_yield = float(div_match.group(1).replace(',', ''))
+            if peer_per_match: peer_per = float(peer_per_match.group(1).replace(',', ''))
+        except Exception:
+            pass
             
-            return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
-            
-        else:
-            per = info.get('trailingPE') or info.get('forwardPE')
-            pbr = info.get('priceToBook')
-            div_yield = info.get('dividendYield')
-            if div_yield: div_yield = round(div_yield * 100, 2)
-            peer_per = info.get('trailingPE') 
-            return per, pbr, sector, div_yield, None, roe, debt_ratio
-    except:
-        return None, None, '알 수 없음', None, None, None, None
+    return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
 
 def calculate_indicators(df):
     close = df['Close'].squeeze()
@@ -105,9 +114,11 @@ def calculate_indicators(df):
 
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
-    df['OBV'] = (vol * (close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0)))).cumsum()
     
-    # 🌟 신규: 5일 평균 거래량 대비 당일 거래량 비율 계산 (상대 거래량)
+    # 🌟 최적화 3: OBV 벡터화 연산 (apply 제거로 연산 속도 대폭 향상)
+    direction = (delta > 0).astype(int) - (delta < 0).astype(int)
+    df['OBV'] = (vol * direction).cumsum()
+    
     df['Vol_MA5'] = vol.rolling(window=5).mean()
     df['Vol_Ratio'] = (vol / df['Vol_MA5']) * 100
     
@@ -119,21 +130,17 @@ def calculate_quant_score(df):
     prev = df.iloc[-2]
     score = 0
     
-    # RSI (25점 배점)
     if not pd.isna(latest['RSI']):
         if latest['RSI'] < 30: score += 25
         elif latest['RSI'] < 50: score += 15
         elif latest['RSI'] < 70: score += 5
         
-    # MACD (25점 배점)
     if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
         if latest['MACD'] > latest['Signal']: score += 25
         
-    # OBV (30점 배점)
     if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: 
         score += 30
         
-    # 🌟 신규 가중치: 거래량 폭발 (20점 배점 - 주가 상승 동반 시)
     if not pd.isna(latest['Vol_Ratio']):
         if latest['Vol_Ratio'] >= 150 and latest['Close'] > prev['Close']:
             score += 20
@@ -181,7 +188,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     ma20 = float(latest['MA20'])
     ma200 = float(latest['MA200']) if not pd.isna(latest['MA200']) else close
     bb_lower = float(latest['BB_Lower']) if not pd.isna(latest['BB_Lower']) else close * 0.9
-    bb_upper = float(latest['BB_Upper']) if not pd.isna(latest['BB_Upper']) else close * 1.1
 
     prev20_close = float(df['Close'].iloc[-20]) if len(df) >= 20 else float(df['Close'].iloc[0])
     prev20_obv = float(df['OBV'].iloc[-20]) if len(df) >= 20 else float(df['OBV'].iloc[0])
@@ -208,7 +214,6 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         elif obv_change > 0: comments['OBV'] = "💪 **건강한 상승**: 주가와 매수 거래량이 동반 상승하며 추세를 뒷받침합니다."
         else: comments['OBV'] = "🍂 **수급 악화**: 매도 거래량이 압도하며 자금이 이탈하고 있습니다."
 
-    # 🌟 신규: 상대 거래량 코멘트
     if pd.isna(vol_ratio): comments['VOL'] = "거래량 데이터를 계산할 수 없습니다."
     elif vol_ratio >= 200: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 5일 평균 대비 거래량이 2배 이상 터졌습니다! 세력 개입이나 강력한 변곡점일 가능성이 높습니다."
     elif vol_ratio >= 120: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
