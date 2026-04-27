@@ -134,8 +134,8 @@ def get_stock_data(code):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 🌟 고도화된 AI 엔진: 분석과 포지션의 100% 동기화 + 화폐 단위 가변화
-def generate_signal_and_comments(df, sup, res, currency, decimals):
+# 🌟 듀얼 AI 엔진: 투자 성향(단기 vs 장기)에 따라 완벽히 다른 뷰 제공
+def generate_signal_and_comments(df, sup, res, currency, decimals, mode):
     latest = df.iloc[-1]
     close = float(latest['Close'])
     rsi = float(latest['RSI'])
@@ -150,25 +150,27 @@ def generate_signal_and_comments(df, sup, res, currency, decimals):
     prev20_rsi = float(df['RSI'].iloc[-20]) if len(df) >= 20 else rsi
     prev_obv = float(df['OBV'].iloc[-5]) if len(df) >= 5 else obv
 
+    is_short_term = "단기" in mode
+
     comments = {}
     
-    # 지표 상세 코멘트 (RSI/MACD/VOL/OBV/ATR)
+    # 지표 상세 코멘트
     if pd.isna(rsi): comments['RSI'] = "데이터 부족"
-    elif rsi >= 70: comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 지수가 70을 넘어 단기 과열권입니다. 수익 실현을 고려할 시점입니다."
-    elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하로 공포 구간입니다. 기술적 반등 가능성이 매우 높습니다."
+    elif rsi >= 70: comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 단기 과열권입니다. 수익 실현을 고려할 시점입니다."
+    elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 공포 구간입니다. 기술적 반등 가능성이 높습니다."
     else: comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 매수/매도세가 균형을 이루고 있습니다."
 
-    if macd > signal: comments['MACD'] = "🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
-    else: comments['MACD'] = "⚠️ **하락 추세**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
+    if macd > signal: comments['MACD'] = "🚀 **상승 추세**: MACD가 시그널선을 상향 돌파하여 긍정적입니다."
+    else: comments['MACD'] = "⚠️ **하락 추세**: MACD가 시그널선 아래에 위치해 단기 조정 압력이 있습니다."
 
     obv_status = "상승" if obv > prev_obv else "하락"
-    comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 평소 대비 유의미한 거래 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래가 이뤄지고 있습니다."
-    comments['OBV'] = f"🕵️‍♂️ **매집 확인**: 최근 5일간 누적 OBV가 {obv_status}하며 자금의 흐름을 보여줍니다."
+    comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 유의미한 거래 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래입니다."
+    comments['OBV'] = f"🕵️‍♂️ **매집 확인**: 최근 5일간 누적 OBV가 {obv_status} 중입니다."
     
     volatility_pct = (atr / close) * 100
-    comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({atr:,.{decimals}f}{currency})** 정도의 변동폭을 보이며 움직이고 있습니다."
+    comments['ATR'] = f"일평균 **{volatility_pct:.1f}% ({atr:,.{decimals}f}{currency})**의 변동폭을 보입니다."
 
-    # 포지션 및 전략 논리 동기화
+    # 패턴 및 이격도 분석
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
     dist_to_res = (res - close) / res * 100 if res > 0 else 100
     near_sup = dist_to_sup <= 5
@@ -180,33 +182,59 @@ def generate_signal_and_comments(df, sup, res, currency, decimals):
     bullish_div = price_down and (obv_up or rsi_up)
     bearish_div = price_up and (not obv_up or not rsi_up)
 
-    position, reason = "⚖️ 관망", "주요 지표의 방향성이 혼재되어 명확한 돌파/지지가 필요합니다."
-    if (rsi < 40 and macd > signal) or (near_sup and bullish_div):
-        position, reason = "🔴 적극 매수", "강력한 반등 신호(상승 다이버전스 또는 지지선 부근)가 포착되었습니다."
-    elif (rsi > 70 and macd < signal) or (near_res and bearish_div):
-        position, reason = "🔷 적극 매도", "강한 고점 징후(하락 다이버전스 또는 저항선 부근)가 포착되었습니다."
-    elif bullish_div or (macd > signal and vol_ratio > 120 and obv > prev_obv):
-        position, reason = "🟠 분할 매수", "긍정적인 매수 수급과 단기 상승 모멘텀이 확인됩니다."
-    elif bearish_div or (macd < signal and vol_ratio > 120 and obv < prev_obv):
-        position, reason = "🔵 비중 축소", "매도 우위 수급과 단기 하락 모멘텀이 포착됩니다."
+    # ==========================================
+    # 🤖 AI 판단 로직 (단기 투자 vs 장기 투자 분리)
+    # ==========================================
+    if is_short_term:
+        # 단기 투자 로직 (파동, 다이버전스, 단기 지표 민감도 높음)
+        position, reason = "⚖️ 단기 관망", "단기 지표의 방향성이 혼재되어 명확한 타점이 필요합니다."
+        if (rsi < 40 and macd > signal) or (near_sup and bullish_div):
+            position, reason = "🔴 단기 적극 매수", "강력한 단기 반등 신호(상승 다이버전스/지지선)가 포착되었습니다."
+        elif (rsi > 70 and macd < signal) or (near_res and bearish_div):
+            position, reason = "🔷 단기 적극 매도", "단기 고점 징후가 뚜렷합니다. 빠른 차익 실현을 권장합니다."
+        elif bullish_div or (macd > signal and vol_ratio > 120 and obv > prev_obv):
+            position, reason = "🟠 단기 분할 매수", "긍정적인 매수 수급과 짧은 상승 모멘텀이 확인됩니다."
+        elif bearish_div or (macd < signal and vol_ratio > 120 and obv < prev_obv):
+            position, reason = "🔵 단기 비중 축소", "매도 우위 수급으로 단기 하락 리스크가 있습니다."
+            
+        ai_opinion = random.choice(["🤖 **StockMap AI 단기 스윙 리포트**\n\n", "⚡ **StockMap AI 단기 트레이딩 진단**\n\n"])
+    else:
+        # 장기 투자 로직 (큰 추세, 60일선 비교, 깊은 과매도 기준)
+        ma60 = df['MA60'].iloc[-1]
+        position, reason = "⚖️ 장기 관망", "장기적 관점에서 뚜렷한 큰 추세 전환이 확인되지 않았습니다."
+        if (rsi < 35) or (near_sup and close > ma60):
+            position, reason = "🔴 비중 확대 (장기)", "장기 우상향 추세 속에서 매력적인 저평가(눌림목) 구간입니다."
+        elif rsi > 75 or near_res:
+            position, reason = "🔷 비중 축소 (장기)", "장기 저항대에 도달했습니다. 리스크 관리 차원의 익절 구간입니다."
+        elif macd > signal and close > ma60:
+            position, reason = "🟠 보유 (Hold)", "장기 우상향 추세가 유효합니다. 안정적인 홀딩 구간입니다."
+        elif macd < signal and close < ma60:
+            position, reason = "🔵 진입 자제 (장기)", "장기 하락 추세가 진행 중이므로 섣부른 물타기를 자제하세요."
 
-    # AI 딥다이브 리포트 생성
-    ai_opinion = random.choice(["🤖 **StockMap AI 심층 분석 리포트**\n\n", "🧠 **StockMap AI 퀀트 다이그노스틱**\n\n"])
+        ai_opinion = random.choice(["🤖 **StockMap AI 장기 가치투자 리포트**\n\n", "🌲 **StockMap AI 거시적 뷰 진단**\n\n"])
+
+    # 공통 AI 코멘트 작성
     sr_text, div_text, trend_text = "", "", ""
+    if near_sup: sr_text = f"주가가 주요 지지선(**{sup:,.{decimals}f}{currency}**)에 근접(이격도 {dist_to_sup:.1f}%)했습니다. 하방 경직성이 확보될 확률이 높은 자리입니다. "
+    elif near_res: sr_text = f"주가가 강력한 저항선(**{res:,.{decimals}f}{currency}**)에 바짝 다가섰습니다. 이 구간 돌파 여부가 향후 흐름을 결정짓습니다. "
     
-    if near_sup: sr_text = f"현재 주가는 심리적 주요 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접(이격도 {dist_to_sup:.1f}%)해 있습니다. 하방 경직성이 확보될 가능성이 높은 자리입니다. "
-    elif near_res: sr_text = f"현재 주가는 강력한 저항선(**{res:,.{decimals}f}{currency}**)에 바짝 다가섰습니다. 이 구간 돌파 여부가 향후 랠리를 결정지을 것입니다. "
-    
-    if bullish_div: div_text = "💡 **[상승 다이버전스]** 가격은 눌리고 있으나 내부 보조지표는 상승하는 현상이 포착되었습니다. 주가의 상방 반전이 임박했습니다. "
-    elif bearish_div: div_text = "⚠️ **[하락 다이버전스]** 주가는 오르지만 거래 수급이 뒤따라오지 못하는 '속임수 상승'일 가능성이 있으니 경계가 필요합니다. "
+    if bullish_div: div_text = "💡 **[상승 다이버전스]** 가격은 눌리지만 보조지표는 상승 중입니다. 세력의 숨은 매집 가능성이 있습니다. "
+    elif bearish_div: div_text = "⚠️ **[하락 다이버전스]** 주가는 오르지만 거래 수급이 뒤따라오지 못하는 불안정한 상승입니다. "
 
     if not sr_text and not div_text:
-        trend_text = "현재 뚜렷한 특이 패턴은 없으나 MACD 시그널을 상회하며 우상향 모멘텀을 모색 중입니다. " if macd > signal else "현재 큰 모멘텀 없이 에너지를 비축하거나 조정을 거치는 휴식 국면입니다. "
+        trend_text = "현재 뚜렷한 특이 패턴은 없으나 MACD 시그널을 상회하며 우상향 모멘텀을 모색 중입니다. " if macd > signal else "큰 모멘텀 없이 조정을 거치는 휴식 국면입니다. "
 
     ai_opinion += sr_text + div_text + trend_text
-    if position == "🔴 적극 매수": ai_opinion += "\n\n🎯 **최종 전략:** 바닥권 탈출을 지지하는 지표들이 발생했습니다. **적극적인 진입 및 비중 확대**를 권장합니다."
-    elif position == "🔷 적극 매도": ai_opinion += "\n\n🎯 **최종 전략:** 단기 고점 징후가 강합니다. **신규 진입을 자제하고 보유 물량은 차익 실현**으로 대응하십시오."
-    else: ai_opinion += "\n\n🎯 **최종 전략:** 방향성이 뚜렷하지 않습니다. **확실한 지지/저항 확인 시까지 관망**하시길 권장합니다."
+    
+    # 🌟 투자 성향에 따른 최종 전략 멘트 완전 분리
+    if is_short_term:
+        if "매수" in position: ai_opinion += "\n\n🎯 **단기 전략:** 단기 바닥 탈출 신호가 강합니다. **빠른 수익 실현과 짧은 손절가**를 기준으로 진입을 권장합니다."
+        elif "매도" in position or "축소" in position: ai_opinion += "\n\n🎯 **단기 전략:** 단기 고점 징후가 강합니다. **신속한 차익 실현으로 수익을 지키는 방어적 대응**을 하십시오."
+        else: ai_opinion += "\n\n🎯 **단기 전략:** 방향성이 뚜렷하지 않습니다. **확실한 타점이 올 때까지 섣부른 진입을 피하고 관망**하세요."
+    else:
+        if "확대" in position or "보유" in position: ai_opinion += "\n\n🎯 **장기 전략:** 거시적 바닥 구간이거나 추세가 양호합니다. **단기 잔파동(노이즈)을 무시하고 긴 호흡으로 모아가는 전략**을 권장합니다."
+        elif "축소" in position or "자제" in position: ai_opinion += "\n\n🎯 **장기 전략:** 큰 사이클에서 고점 부근이거나 하락 추세입니다. **장기 물량을 일부 덜어내고 펀더멘탈 회복을 기다리십시오.**"
+        else: ai_opinion += "\n\n🎯 **장기 전략:** 긴 시계열에서 방향성이 모호합니다. **섣부른 비중 확대보다 관망하며 다음 매크로 환경 변화를 대기**하세요."
 
     comments['AI'] = ai_opinion
     return position, reason, rsi, atr, comments
@@ -216,7 +244,8 @@ def generate_signal_and_comments(df, sup, res, currency, decimals):
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정")
-    analyze_mode = st.radio("초기 차트 뷰", ["단기 (6개월)", "장기 (2년)"])
+    # 🌟 듀얼 버전 설정 스위치
+    analyze_mode = st.radio("투자 성향 설정", ["단기 투자 (6개월 차트)", "장기 투자 (2년 차트)"])
     new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, AAPL, NVDA 등")
     target_query = new_search if st.button("🚀 분석 실행", type="primary", use_container_width=True) else None
     st.divider()
@@ -229,7 +258,9 @@ if target_query:
         st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
         st.session_state.recent_searches = st.session_state.recent_searches[:5]
 
-    with st.spinner(f"📡 '{display_name}' 딥다이브 분석 중..."):
+    # 모드에 따라 스피너 멘트 변경
+    sp_text = "단기 트레이딩" if "단기" in analyze_mode else "장기 가치투자"
+    with st.spinner(f"📡 '{display_name}' {sp_text} 관점 분석 중..."):
         df = get_stock_data(ticker_symbol)
         
     if df.empty:
@@ -239,7 +270,6 @@ if target_query:
         diff = cur_price - df['Close'].iloc[-2]
         
         st.subheader(f"📑 {display_name} 리포트")
-        # 🌟 화폐 단위 및 소수점 가변 표기 적용
         st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency_symbol}", f"{diff:,.{decimals}f} {currency_symbol}")
 
         q_score = calculate_quant_score(df)
@@ -247,7 +277,7 @@ if target_query:
         st.progress(q_score / 100)
 
         pts, sup, res = detect_patterns_and_levels(df)
-        pos, reason, rsi, atr, comments = generate_signal_and_comments(df, sup, res, currency_symbol, decimals)
+        pos, reason, rsi, atr, comments = generate_signal_and_comments(df, sup, res, currency_symbol, decimals, analyze_mode)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -275,6 +305,7 @@ if target_query:
                 with c1.popover(label, use_container_width=True): st.info(f"**{label}**\n\n{info_text}")
                 c2.markdown(comments.get(key, '데이터 없음'))
             st.divider()
+            # 🌟 단기/장기에 맞춰진 맞춤형 AI 리포트 출력
             st.info(comments.get('AI'))
 
         # ==========================================
