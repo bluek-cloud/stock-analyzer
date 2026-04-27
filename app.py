@@ -40,18 +40,16 @@ def parse_query(query):
 
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
-    # 변수 초기화
     sector = 'KOR Equity'
     roe, debt_ratio, per, pbr, div_yield, peer_per = None, None, None, None, None, None
     
-    # 🌟 최적화 1: 야후 파이낸스 크롤링 (독립 예외처리)
+    # 1. 야후 파이낸스 (섹터 정보 및 해외 주식 데이터용)
     try:
         info = yf.Ticker(ticker).info
         sector = info.get('sector', 'KOR Equity')
-        
+        # 야후 데이터가 있다면 우선 할당
         roe = info.get('returnOnEquity')
         if roe is not None: roe = round(roe * 100, 2)
-        
         debt_ratio = info.get('debtToEquity')
         if debt_ratio is not None: debt_ratio = round(debt_ratio, 2)
         
@@ -61,19 +59,20 @@ def get_fundamentals(ticker):
             div_yield = info.get('dividendYield')
             if div_yield: div_yield = round(div_yield * 100, 2)
             peer_per = info.get('trailingPE') 
-    except Exception:
-        pass # 에러 발생 시 무시하고 다음 단계로 진행
+    except:
+        pass
 
-    # 🌟 최적화 2: 네이버 금융 크롤링 (독립 예외처리 및 타임아웃 적용)
+    # 2. 네이버 금융 (국내 주식용 - 야후 차단 대비 강력한 백업)
     if ticker.endswith('.KS') or ticker.endswith('.KQ'):
         try:
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            # timeout=5 설정으로 무한 대기 프리징 방지
-            res = requests.get(url, headers=headers, timeout=5) 
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            res = requests.get(url, headers=headers, timeout=5)
+            res.encoding = 'euc-kr' # 🌟 인코딩 설정 (한글 깨짐 방지)
             text = res.text
             
+            # PER, PBR, 배당 등 추출
             per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
             pbr_match = re.search(r'<em id="_pbr">([\d.,]+)</em>', text)
             div_match = re.search(r'<em id="_dvr">([\d.,]+)</em>', text)
@@ -83,7 +82,21 @@ def get_fundamentals(ticker):
             if pbr_match: pbr = float(pbr_match.group(1).replace(',', ''))
             if div_match: div_yield = float(div_match.group(1).replace(',', ''))
             if peer_per_match: peer_per = float(peer_per_match.group(1).replace(',', ''))
-        except Exception:
+
+            # 🌟 ROE 및 부채비율 추출 (표 데이터 파싱)
+            def find_financial_value(label, html_text):
+                pattern = rf'<th>{label}</th>.*?<td>([\d.,\-]+)</td>'
+                match = re.search(pattern, html_text, re.DOTALL)
+                if match:
+                    val = match.group(1).replace(',', '')
+                    return float(val) if val != '-' else None
+                return None
+
+            # 야후 데이터가 실패했을 경우(N/A) 네이버에서 직접 추출
+            if roe is None: roe = find_financial_value('ROE\(%\)', text)
+            if debt_ratio is None: debt_ratio = find_financial_value('부채비율', text)
+            
+        except:
             pass
             
     return per, pbr, sector, div_yield, peer_per, roe, debt_ratio
@@ -115,7 +128,7 @@ def calculate_indicators(df):
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
-    # 🌟 최적화 3: OBV 벡터화 연산 (apply 제거로 연산 속도 대폭 향상)
+    # OBV 벡터화 최적화
     direction = (delta > 0).astype(int) - (delta < 0).astype(int)
     df['OBV'] = (vol * direction).cumsum()
     
@@ -215,10 +228,9 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         else: comments['OBV'] = "🍂 **수급 악화**: 매도 거래량이 압도하며 자금이 이탈하고 있습니다."
 
     if pd.isna(vol_ratio): comments['VOL'] = "거래량 데이터를 계산할 수 없습니다."
-    elif vol_ratio >= 200: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 5일 평균 대비 거래량이 2배 이상 터졌습니다! 세력 개입이나 강력한 변곡점일 가능성이 높습니다."
-    elif vol_ratio >= 120: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
-    elif vol_ratio >= 80: comments['VOL'] = f"➖ **평균 수준 ({vol_ratio:.0f}%)**: 평소와 비슷한 수준의 무난한 거래가 이루어지고 있습니다."
-    else: comments['VOL'] = f"💤 **소외/관망 ({vol_ratio:.0f}%)**: 거래량이 말라붙었습니다. 에너지를 응축 중이거나 시장의 관심에서 멀어져 있습니다."
+    elif vol_ratio >= 150: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 최근 거래량이 크게 터졌습니다! 세력 개입 가능성이 높습니다."
+    elif vol_ratio >= 110: comments['VOL'] = f"🌊 **거래 활발 ({vol_ratio:.0f}%)**: 시장의 관심이 쏠리며 유의미한 거래량이 유입되고 있습니다."
+    else: comments['VOL'] = f"💤 **소외/관망 ({vol_ratio:.0f}%)**: 거래량이 말라붙었습니다. 에너지를 응축 중이거나 관심에서 멀어져 있습니다."
 
     if pd.isna(atr) or pd.isna(close) or close == 0:
         comments['ATR'] = "변동성 데이터를 계산할 수 없습니다."
@@ -238,27 +250,19 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         if per < 0: 
             f_lines.append("🚨 **PER(적자)**: 현재 순이익이 적자 상태입니다. 실적 턴어라운드 확인이 필요합니다.")
         elif peer_per is not None and peer_per > 0:
-            if per < peer_per * 0.8: f_lines.append(f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다! (매력적)")
-            elif per > peer_per * 1.2: f_lines.append(f"🔥 **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 주가가 **고평가(프리미엄)**를 받고 있습니다.")
-            else: f_lines.append(f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**({peer_per:.2f}배)을 적용받고 있습니다.")
-        else:
-            if per < 15.0: f_lines.append(f"✅ **PER({per:.2f})**: 시장 평균치 대비 **저평가** 상태입니다.")
-            elif per > 30.0: f_lines.append(f"🔥 **PER({per:.2f})**: 시장 평균치 대비 **고평가** 상태입니다.")
-            else: f_lines.append(f"➖ **PER({per:.2f})**: 시장 평균 수익 가치 수준입니다.")
+            if per < peer_per * 0.8: f_lines.append(f"✅ **PER({per:.2f})**: 동일업종 평균({peer_per:.2f}배) 대비 확실히 **저평가**되어 있습니다!")
+            elif per > peer_per * 1.2: f_lines.append(f"🔥 **PER({per:.2f})**: 동일업종 평균 대비 주가가 **고평가**를 받고 있습니다.")
+            else: f_lines.append(f"➖ **PER({per:.2f})**: 업종 내 경쟁사들과 **비슷한 평균 밸류에이션**을 적용받고 있습니다.")
             
     if roe is not None:
         if roe >= 15.0: f_lines.append(f"🏅 **ROE({roe:.2f}%)**: 워런 버핏의 기준(15%)을 통과한 **초우량 수익성**입니다.")
         elif roe >= 8.0: f_lines.append(f"✅ **ROE({roe:.2f}%)**: 안정적이고 양호한 수익성을 보여주고 있습니다.")
-        elif roe > 0: f_lines.append(f"⚠️ **ROE({roe:.2f}%)**: 수익성이 다소 낮은 편입니다. 자본 효율성 개선이 필요합니다.")
-        else: f_lines.append(f"🚨 **ROE({roe:.2f}%)**: 자본 대비 수익이 마이너스(적자) 상태입니다.")
+        else: f_lines.append(f"⚠️ **ROE({roe:.2f}%)**: 수익성이 낮거나 적자 상태입니다.")
         
     if debt_ratio is not None:
-        if any(s in str(sector).lower() for s in ['financial', 'bank', 'insurance']):
-            f_lines.append(f"🏦 **부채비율({debt_ratio:.2f}%)**: 금융업종 특성상 레버리지를 활용하는 정상적인 비즈니스 구조입니다.")
-        else:
-            if debt_ratio <= 100.0: f_lines.append(f"🛡️ **부채비율({debt_ratio:.2f}%)**: 빚이 적고 재무가 **매우 건전**합니다. 금리 인상기에도 끄떡없습니다.")
-            elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
-            else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 부채비율이 200%를 초과하여 **재무 리스크**가 존재합니다.")
+        if debt_ratio <= 100.0: f_lines.append(f"🛡️ **부채비율({debt_ratio:.2f}%)**: 빚이 적고 재무가 **매우 건전**합니다.")
+        elif debt_ratio <= 200.0: f_lines.append(f"➖ **부채비율({debt_ratio:.2f}%)**: 일반적이고 통제 가능한 수준의 부채를 보유하고 있습니다.")
+        else: f_lines.append(f"⚠️ **부채비율({debt_ratio:.2f}%)**: 재무 리스크가 존재할 수 있습니다.")
 
     comments['FUNDAMENTAL'] = f_lines if f_lines else ["해당 종목의 재무 데이터를 불러올 수 없습니다."]
 
@@ -269,12 +273,10 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     
     if not pd.isna(atr):
         if "단기" in mode:
-            if not pd.isna(rsi) and rsi < 40 and macd_curr > sig_curr and macd_prev <= sig_prev:
+            if not pd.isna(rsi) and rsi < 40 and macd_curr > sig_curr:
                 position, reason = "🔴 적극 매수 (Strong Buy)", "과매도 부근 골든크로스 발생."
             elif not pd.isna(ma20) and close > ma20 and macd_curr > sig_curr:
                 position, reason = "🟠 분할 매수 (Buy)", "20일선 위 안정적 상승 추세."
-            elif not pd.isna(rsi) and rsi > 70 and macd_curr < sig_curr:
-                position, reason = "🔷 적극 매도 (Strong Sell)", "단기 과열 및 데드크로스."
             t_buy, t_sell, s_loss = int(close - atr*0.5), int(close + atr*1.5), int(close - atr*2)
         else:
             if close < bb_lower and not pd.isna(rsi) and rsi < 35:
