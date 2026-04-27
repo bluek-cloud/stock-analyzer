@@ -38,6 +38,14 @@ def parse_query(query):
         return f"{query} ({code})", f"{code}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
     return f"{query} (해외/기타)", query, query
 
+# 🌟 봇 차단 우회를 위한 강력한 브라우저 헤더
+REQ_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://finance.naver.com/'
+}
+
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
@@ -53,8 +61,8 @@ def get_fundamentals(ticker):
         if ticker.endswith('.KS') or ticker.endswith('.KQ'):
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers)
+            # 🌟 강화된 헤더 적용
+            res = requests.get(url, headers=REQ_HEADERS)
             text = res.text
             
             per_match = re.search(r'<em id="_per">([\d.,]+)</em>', text)
@@ -87,8 +95,8 @@ def get_investor_trend(ticker):
     try:
         code = ticker.split('.')[0]
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers)
+        # 🌟 강화된 헤더 적용
+        res = requests.get(url, headers=REQ_HEADERS)
         res.encoding = 'euc-kr'
         
         dfs = pd.read_html(res.text, match='순매매량')
@@ -192,6 +200,7 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     latest, prev = df.iloc[-1], df.iloc[-2]
     close, rsi = float(latest['Close']), float(latest['RSI'])
     macd_curr, sig_curr = float(latest['MACD']), float(latest['Signal'])
+    macd_prev, sig_prev = float(prev['MACD']), float(prev['Signal'])
     atr, obv = float(latest['ATR']), float(latest['OBV'])
     vol_ratio = float(latest['Vol_Ratio'])
     
