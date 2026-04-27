@@ -17,6 +17,14 @@ st.markdown("---")
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
+# 🌟 봇 차단 우회를 위한 강력한 브라우저 헤더
+REQ_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://finance.naver.com/'
+}
+
 # ==========================================
 # 2. 데이터 처리 및 지표 계산 함수
 # ==========================================
@@ -38,14 +46,6 @@ def parse_query(query):
         return f"{query} ({code})", f"{code}{'.KS' if market in ['KOSPI', 'KOSPI200'] else '.KQ'}", query
     return f"{query} (해외/기타)", query, query
 
-# 🌟 봇 차단 우회를 위한 강력한 브라우저 헤더
-REQ_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': 'https://finance.naver.com/'
-}
-
 @st.cache_data(ttl=3600)
 def get_fundamentals(ticker):
     try:
@@ -61,7 +61,6 @@ def get_fundamentals(ticker):
         if ticker.endswith('.KS') or ticker.endswith('.KQ'):
             code = ticker.split('.')[0]
             url = f"https://finance.naver.com/item/main.naver?code={code}"
-            # 🌟 강화된 헤더 적용
             res = requests.get(url, headers=REQ_HEADERS)
             text = res.text
             
@@ -87,6 +86,7 @@ def get_fundamentals(ticker):
     except:
         return None, None, '알 수 없음', None, None, None, None
 
+# 🌟 클라우드 에러 완벽 해결: 판다스 HTML 파서 의존성을 완전히 제거한 커스텀 추출 로직
 @st.cache_data(ttl=3600)
 def get_investor_trend(ticker):
     if not (ticker.endswith('.KS') or ticker.endswith('.KQ')):
@@ -95,18 +95,48 @@ def get_investor_trend(ticker):
     try:
         code = ticker.split('.')[0]
         url = f"https://finance.naver.com/item/frgn.naver?code={code}"
-        # 🌟 강화된 헤더 적용
         res = requests.get(url, headers=REQ_HEADERS)
         res.encoding = 'euc-kr'
+        html = res.text
         
-        dfs = pd.read_html(res.text, match='순매매량')
-        df = dfs[0].dropna()
+        # '순매매량' 테이블 구역 찾기
+        table_start = html.find('순매매량')
+        if table_start == -1: 
+            return None, None
+            
+        # 데이터 행(row) 단위로 쪼개기
+        rows = html[table_start:].split('onmouseover="mouseOver(this)"')
         
-        recent_5 = df.head(5)
-        inst_sum = recent_5.iloc[:, 5].astype(str).str.replace(',', '').str.replace('+', '').astype(float).sum()
-        fore_sum = recent_5.iloc[:, 6].astype(str).str.replace(',', '').str.replace('+', '').astype(float).sum()
+        inst_sum = 0
+        fore_sum = 0
+        count = 0
         
-        return int(inst_sum), int(fore_sum)
+        for row in rows[1:]: # 첫 번째는 헤더 이전 값이므로 스킵
+            if count >= 5: 
+                break
+                
+            cols = row.split('<td')
+            if len(cols) >= 8:
+                # td 안의 순수 텍스트만 추출하는 내부 함수
+                def extract_val(td_str):
+                    texts = re.findall(r'>([^<]+)<', td_str)
+                    raw_text = ''.join(texts)
+                    cleaned = re.sub(r'[^\d\-]', '', raw_text) # 숫자와 마이너스 부호만 남김
+                    if cleaned in ['', '-']: return 0
+                    return int(cleaned)
+
+                # 6번째가 기관, 7번째가 외국인 데이터 위치 (HTML 구조 기준)
+                inst_val = extract_val(cols[6])
+                fore_val = extract_val(cols[7])
+                
+                inst_sum += inst_val
+                fore_sum += fore_val
+                count += 1
+                
+        if count == 0: 
+            return None, None
+            
+        return inst_sum, fore_sum
     except:
         return None, None
 
@@ -207,6 +237,7 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
     ma20 = float(latest['MA20'])
     ma200 = float(latest['MA200']) if not pd.isna(latest['MA200']) else close
     bb_lower = float(latest['BB_Lower']) if not pd.isna(latest['BB_Lower']) else close * 0.9
+    bb_upper = float(latest['BB_Upper']) if not pd.isna(latest['BB_Upper']) else close * 1.1
 
     prev20_close = float(df['Close'].iloc[-20]) if len(df) >= 20 else float(df['Close'].iloc[0])
     prev20_obv = float(df['OBV'].iloc[-20]) if len(df) >= 20 else float(df['OBV'].iloc[0])
@@ -229,6 +260,7 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
 
     if pd.isna(rsi): comments['RSI'] = "데이터 부족으로 RSI를 계산할 수 없습니다."
     elif rsi >= 70: comments['RSI'] = "🔥 **과매수 (Overbought)**: 단기 과열 구간입니다. 신규 진입은 자제하세요."
+    elif 30 < rsi < 45: comments['RSI'] = "📉 **약세 국면**: 매도세가 우세합니다. 바닥 확인이 필요합니다."
     elif rsi <= 30: comments['RSI'] = "❄️ **과매도 (Oversold)**: 공포 구간이나 반등 가능성이 높습니다."
     else: comments['RSI'] = "📈 **정상 범위**: 안정적인 흐름을 유지 중입니다."
 
@@ -243,7 +275,8 @@ def generate_signal_and_comments(df, mode, per, pbr, sector, peer_per, roe, debt
         obv_change = obv - prev20_obv
         if price_change <= 0 and obv_change > 0: comments['OBV'] = "🕵️‍♂️ **숨은 매집**: 주가는 하락/횡보하지만 수급(OBV)은 증가 중입니다. 상승 전조일 수 있습니다."
         elif price_change > 0 and obv_change < 0: comments['OBV'] = "🚨 **이탈 징후**: 주가는 오르는데 거래량은 빠지고 있습니다. '가짜 상승'을 주의하세요."
-        else: comments['OBV'] = "💪 **건강한 상승**: 주가와 매수 거래량이 동반 상승하며 추세를 뒷받침합니다."
+        elif obv_change > 0: comments['OBV'] = "💪 **건강한 상승**: 주가와 매수 거래량이 동반 상승하며 추세를 뒷받침합니다."
+        else: comments['OBV'] = "🍂 **수급 악화**: 매도 거래량이 압도하며 자금이 이탈하고 있습니다."
 
     if pd.isna(vol_ratio): comments['VOL'] = "거래량 데이터를 계산할 수 없습니다."
     elif vol_ratio >= 150: comments['VOL'] = f"🌋 **수급 폭발 ({vol_ratio:.0f}%)**: 거래량이 평소보다 크게 터졌습니다! 세력 개입 가능성이 높습니다."
