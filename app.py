@@ -27,17 +27,11 @@ st.markdown("""
         background-color: rgba(255, 165, 0, 0.05);
         border-left: 4px solid #FF8C00;
     }
-    /* 모바일 줌 버튼 스타일 보강 */
-    .stButton>button { width: 100%; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("📈 StockMap")
 st.markdown("---")
-
-# 줌 레벨 관리를 위한 세션 상태 초기화
-if 'zoom_level' not in st.session_state:
-    st.session_state.zoom_level = 1.0
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
@@ -134,7 +128,6 @@ def get_stock_data(code):
         return df
     except: return pd.DataFrame()
 
-# 🌟 NameError 수정 및 상세 의견 생성 로직 완벽 결합
 def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -199,7 +192,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif close < ma60 and rsi < 35: position, strategy = "🟠 저점 매수 (장기)", "역사적 저평가 구간으로 분할 매집이 유효합니다."
         elif rsi > 75: position, strategy = "🔷 비중 축소 (장기)", "강력한 저항 및 과열권에 도달했습니다. 일부 수익 실현을 권장합니다."
 
-    # 🌟 에러 수정 구간: mode_str 변수를 직접 생성하여 사용
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     ai_opinion = f"🤖 **StockMap AI {mode_str} 심층 진단**\n\n"
     
@@ -257,8 +249,7 @@ if target_query:
             chart_df = calculate_indicators(raw_df.copy())
             default_days = 180
 
-        cur_price = raw_df['Close'].iloc[-1]
-        diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
+        cur_price, diff = raw_df['Close'].iloc[-1], raw_df['Close'].iloc[-1] - raw_df['Close'].iloc[-2]
         st.subheader(f"📑 {display_name} 리포트")
         st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
 
@@ -284,37 +275,31 @@ if target_query:
         with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
             for label, key in [("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                 c1, c2 = st.columns([0.25, 0.75])
-                with c1.popover(label, use_container_width=True): st.info(f"**{label}**")
+                with c1.popover(label, use_container_width=True): st.info(f"**{label}** 상세 설명...")
                 c2.markdown(comments.get(key, '데이터 없음'))
             st.divider()
             st.info(comments.get('AI'))
 
         # ==========================================
-        # 🌟 모바일 줌 버튼 & 신규 상장주 대응 차트 구역
+        # 🌟 모바일 친화적 좌우 이동(Swipe/Pan) 전용 차트
         # ==========================================
-        tab1, tab2 = st.tabs(["📈 주가 차트 (드래그 이동)", "📊 수급 에너지(OBV)"])
+        tab1, tab2 = st.tabs(["📈 주가 차트 (좌우 드래그)", "📊 수급 에너지(OBV)"])
         
-        # 줌 제어 버튼 (핀치 줌이 안되는 모바일 기기 완벽 대응)
-        z_col1, z_col2, z_col3, _ = st.columns([0.2, 0.2, 0.2, 0.4])
-        if z_col1.button("🔍 확대 (+)", use_container_width=True): st.session_state.zoom_level = max(0.2, st.session_state.zoom_level - 0.2)
-        if z_col2.button("🔍 축소 (-)", use_container_width=True): st.session_state.zoom_level = min(3.0, st.session_state.zoom_level + 0.2)
-        if z_col3.button("🔄 초기화", use_container_width=True): st.session_state.zoom_level = 1.0
-
-        # 신규 상장주 대응 로직: 데이터가 있는 지점과 줌 레벨을 동적으로 계산하여 빈 공간 제거
+        # 신규 상장주 빈공간 제거를 위한 시작점 동적 계산
         data_start_date = chart_df.index[0]
-        calculated_start_date = datetime.now() - timedelta(days=int(default_days * st.session_state.zoom_level))
-        final_start_date = max(data_start_date, calculated_start_date) # 둘 중 더 최신 날짜(늦은 날짜)를 시작점으로 설정
+        calculated_start_date = datetime.now() - timedelta(days=default_days)
+        final_start_date = max(data_start_date, calculated_start_date)
         
         with tab1:
             fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)))
             fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)))
             
-            # 모바일 드래그 친화적 환경 설정 (pan 모드 고정)
             fig.update_layout(
                 height=450, margin=dict(t=10, b=10, l=0, r=0), 
                 dragmode='pan', hovermode='x unified', 
-                xaxis=dict(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False))
+                xaxis=dict(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=False),
+                yaxis=dict(fixedrange=True) # Y축 상하 움직임 및 확대/축소를 잠가서 좌우 스와이프를 편하게 만듦
             )
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
             
@@ -324,6 +309,7 @@ if target_query:
                 obv_fig.update_layout(
                     height=350, margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode='pan', 
-                    xaxis=dict(range=[final_start_date, datetime.now()])
+                    xaxis=dict(range=[final_start_date, datetime.now()], fixedrange=False),
+                    yaxis=dict(fixedrange=True)
                 )
                 st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
