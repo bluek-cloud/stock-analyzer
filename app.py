@@ -4,7 +4,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
-import random
 
 # ==========================================
 # 1. 페이지 설정 및 제목 (모바일 최적화)
@@ -19,13 +18,6 @@ st.markdown("""
         padding: 10px; border-radius: 10px; 
         border: 1px solid rgba(128, 128, 128, 0.2); 
     }
-    .macro-panel {
-        padding: 15px;
-        border-radius: 10px;
-        background-color: rgba(0, 150, 255, 0.05);
-        border: 1px solid rgba(0, 150, 255, 0.1);
-        margin-bottom: 20px;
-    }
     .style-box {
         padding: 12px;
         border-radius: 8px;
@@ -38,51 +30,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# ==========================================
-# 2. 글로벌 매크로 패널
-# ==========================================
-@st.cache_data(ttl=3600)
-def get_macro_data():
-    try:
-        kospi = fdr.DataReader('KS11').tail(2)
-        sp500 = fdr.DataReader('US500').tail(2)
-        usdkrw = fdr.DataReader('USD/KRW').tail(2)
-        vix = fdr.DataReader('^VIX').tail(2)
-        return kospi, sp500, usdkrw, vix
-    except:
-        return None, None, None, None
-
-st.title("📈 StockMap Dashboard")
-
-m_kospi, m_sp500, m_usd, m_vix = get_macro_data()
-
-if m_kospi is not None:
-    with st.container():
-        st.markdown('<div class="macro-panel">', unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        
-        def get_delta(df):
-            val = df['Close'].iloc[-1]
-            diff = val - df['Close'].iloc[-2]
-            return val, diff
-
-        v, d = get_delta(m_kospi)
-        c1.metric("KOSPI", f"{v:,.2f}", f"{d:+.2f}")
-        v, d = get_delta(m_sp500)
-        c2.metric("S&P 500", f"{v:,.2f}", f"{d:+.2f}")
-        v, d = get_delta(m_usd)
-        c3.metric("USD/KRW", f"{v:,.1f}원", f"{d:+.1f}")
-        v, d = get_delta(m_vix)
-        c4.metric("VIX (공포지수)", f"{v:,.2f}", f"{d:+.2f}", delta_color="inverse")
-        st.markdown('</div>', unsafe_allow_html=True)
-
+st.title("📈 StockMap")
 st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
 # ==========================================
-# 3. 데이터 처리 및 지표 계산 함수
+# 2. 데이터 처리 및 지표 계산 함수
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_krx_data():
@@ -237,7 +192,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     return position, strategy, comments
 
 # ==========================================
-# 4. 사이드바 및 실행 UI
+# 3. 사이드바 및 실행 UI
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정")
@@ -262,7 +217,7 @@ with st.sidebar:
             target_query = item['query']
 
 # ==========================================
-# 5. 메인 화면 분석 결과 출력
+# 4. 메인 화면 분석 결과 출력
 # ==========================================
 if target_query:
     display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
@@ -282,10 +237,10 @@ if target_query:
         if not is_short_term:
             chart_df = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
             chart_df = calculate_indicators(chart_df)
-            default_days = 730 # 2년
+            default_days = 730 # 장기: 2년
         else:
             chart_df = calculate_indicators(raw_df.copy())
-            default_days = 180 # 6개월
+            default_days = 180 # 단기: 6개월
 
         cur_price = raw_df['Close'].iloc[-1]
         diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
@@ -320,19 +275,22 @@ if target_query:
             st.info(comments.get('AI'))
 
         # ==========================================
-        # 🌟 완전 고정형 및 능동 반응형 차트 (이동/확대 차단)
+        # 🌟 완전 고정형 및 능동 반응형 차트 (이동/확대 완전 차단)
         # ==========================================
         tab1, tab2 = st.tabs(["📈 주가 & RSI 차트", "📊 수급 에너지(OBV)"])
         
+        # 🌟 핵심 1: 화면에 렌더링할 정확한 날짜 계산 (6개월/2년 고정)
         data_start_date = chart_df.index[0]
         calculated_start_date = datetime.now() - timedelta(days=default_days)
         final_start_date = max(data_start_date, calculated_start_date)
         
-        # 🌟 핵심: 화면에 보이는 데이터(6개월 or 2년) 기준 최고/최저점 자동 계산 (능동적 Y축)
-        visible_df = chart_df[chart_df.index >= final_start_date]
-        if not visible_df.empty:
-            min_vals = visible_df[['Low', 'MA20', 'MA60']].min()
-            max_vals = visible_df[['High', 'MA20', 'MA60']].max()
+        # 🌟 핵심 2: Plotly가 과거 데이터를 불러오지 못하도록 데이터를 잘라내서(Slicing) 새로운 DataFrame 생성
+        plot_df = chart_df[chart_df.index >= final_start_date]
+        
+        # 🌟 핵심 3: 잘라낸 데이터 안에서 최고/최저점을 계산하여 능동적으로 Y축 설정
+        if not plot_df.empty:
+            min_vals = plot_df[['Low', 'MA20', 'MA60']].min()
+            max_vals = plot_df[['High', 'MA20', 'MA60']].max()
             c_min = min_vals.min()
             c_max = max_vals.max()
             # 위아래로 5%의 여백을 주어 캔들이 잘리지 않게 조정
@@ -344,13 +302,13 @@ if target_query:
         with tab1:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
             
-            # Row 1: 주가 및 이동평균선
-            fig.add_trace(go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
+            # Row 1: 주가 및 이동평균선 (잘라낸 plot_df 사용)
+            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
             
-            # Row 2: RSI
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
+            # Row 2: RSI (잘라낸 plot_df 사용)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
             fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
             fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
@@ -358,11 +316,11 @@ if target_query:
             fig.update_layout(
                 height=550, 
                 margin=dict(t=10, b=10, l=0, r=0), 
-                dragmode=False, # 🌟 차트 마우스 드래그/스와이프 완벽 차단
+                dragmode=False, # 🌟 차트 마우스 드래그/이동 완벽 차단
                 hovermode='x unified', showlegend=False
             )
             
-            # 모든 축 고정 (fixedrange=True)
+            # 모든 축 이동/확대 잠금 (fixedrange=True)
             fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
             fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
             fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # 🌟 능동적 Y축 스케일링 적용
@@ -371,8 +329,8 @@ if target_query:
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
             
         with tab2:
-            if 'OBV' in chart_df.columns:
-                obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
+            if 'OBV' in plot_df.columns:
+                obv_fig = go.Figure(data=[go.Scatter(x=plot_df.index, y=plot_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
                 obv_fig.update_layout(
                     height=350, margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode=False, # 🌟 이동 차단
