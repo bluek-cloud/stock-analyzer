@@ -9,11 +9,12 @@ from datetime import datetime, timedelta
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
-# 모바일 환경에서 상단 여백 조정을 위한 CSS
+# 모바일 환경에서 상단 여백 조정 및 다크모드 대응 CSS 수정
 st.markdown("""
     <style>
     .reportview-container .main .block-container { padding-top: 1rem; }
-    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 10px; }
+    /* 다크/라이트 테마 모두에서 가독성을 높이도록 반투명 배경과 테두리 적용 */
+    [data-testid="stMetric"] { background-color: rgba(128, 128, 128, 0.1); padding: 10px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -126,7 +127,7 @@ def get_stock_data(code, mode):
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 🌟 수정: 수치를 포함한 상세 분석 로직
+# 수치를 포함한 상세 분석 로직
 def generate_signal_and_comments(df, mode):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -226,14 +227,33 @@ if target_query:
                 st.write(f"🛡️ **지지:** {sup:,.0f} | 🚧 **저항:** {res:,.0f}")
 
         with st.expander("🔬 지표별 상세 수치 분석", expanded=True):
-            # 🌟 수치 중심의 상세 설명 UI
-            st.write(f"**[상대 거래량]** {comments.get('VOL')}")
-            st.write(f"**[OBV 누적]** {comments.get('OBV')}")
-            st.write(f"**[RSI 강도]** {comments.get('RSI')}")
-            st.write(f"**[MACD 흐름]** {comments.get('MACD')}")
-            st.write(f"**[ATR 변동성]** {comments.get('ATR')}")
+            # 🌟 아이콘을 제거하고 지표 이름을 버튼화하여 클릭 시 설명 표시
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1.popover("상대 거래량", use_container_width=True):
+                st.info("**상대 거래량(Relative Volume)**\n\n최근 5일 평균 거래량 대비 오늘 거래량이 얼마나 터졌는지를 나타냅니다. 150~200% 이상이면 세력 유입이나 강한 추세 변화의 신호로 봅니다.")
+            c2.markdown(comments.get('VOL', '데이터 없음'))
+            
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1.popover("OBV 누적", use_container_width=True):
+                st.info("**OBV(On-Balance Volume)**\n\n거래량은 주가에 선행한다는 원리를 이용한 지표입니다. 주가가 하락해도 OBV가 상승하면 '숨은 매집'으로 판단하며, 반대의 경우 '이탈 징후'로 봅니다.")
+            c2.markdown(comments.get('OBV', '데이터 없음'))
+            
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1.popover("RSI 강도", use_container_width=True):
+                st.info("**RSI(상대강도지수)**\n\n주가의 상승 압력과 하락 압력 간의 상대적 강도를 나타냅니다. 70 이상은 '과매수(거품)', 30 이하는 '과매도(저평가)' 구간으로 해석합니다.")
+            c2.markdown(comments.get('RSI', '데이터 없음'))
+            
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1.popover("MACD 흐름", use_container_width=True):
+                st.info("**MACD(이동평균 수렴확산)**\n\n단기 추세선과 장기 추세선이 얼마나 가까워지고 멀어지는지를 측정합니다. 골든크로스가 발생하면 상승 추세의 시작으로 봅니다.")
+            c2.markdown(comments.get('MACD', '데이터 없음'))
+            
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1.popover("ATR 변동성", use_container_width=True):
+                st.info("**ATR(평균 실변동폭)**\n\n일정 기간 동안 주가가 얼마나 '출렁'거렸는지 변동성을 보여줍니다. ATR이 높을수록 주가가 급등락하기 쉬우므로 위험 관리가 필요합니다.")
+            c2.markdown(comments.get('ATR', '데이터 없음'))
 
-        # 🌟 스마트폰용 핀치 줌 지원 차트
+        # 스마트폰용 핀치 줌 지원 차트
         tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
         chart_df = df.tail(100)
         
@@ -251,7 +271,7 @@ if target_query:
             )
             
             st.plotly_chart(fig, use_container_width=True, config={
-                'scrollZoom': True, # 🌟 핀치 줌 활성화
+                'scrollZoom': True, # 핀치 줌 활성화
                 'displayModeBar': False,
                 'doubleClick': 'reset+autosize'
             })
