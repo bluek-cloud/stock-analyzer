@@ -5,15 +5,21 @@ import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. 페이지 설정 및 제목 (모바일 최적화)
+# 1. 페이지 설정 및 제목 (모바일 및 테마 최적화)
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
-# 모바일 환경에서 상단 여백 조정을 위한 CSS
+# 가독성 및 디자인 개선을 위한 CSS
 st.markdown("""
     <style>
-    .reportview-container .main .block-container { padding-top: 1rem; }
-    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 10px; }
+    /* 메트릭 및 컨테이너 가독성 개선 */
+    [data-testid="stMetric"] {
+        background-color: rgba(128, 128, 128, 0.1);
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+    }
+    .stExpander { border: none !important; box-shadow: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -45,6 +51,9 @@ def parse_query(query):
     return f"{query} (해외/기타)", query, query
 
 def calculate_indicators(df):
+    # 데이터가 비어있는 경우 방어 로직
+    if df.empty: return df
+    
     close = df['Close'].squeeze()
     high = df['High'].squeeze()
     low = df['Low'].squeeze()
@@ -52,7 +61,6 @@ def calculate_indicators(df):
 
     df['MA20'] = close.rolling(window=20).mean()
     df['MA60'] = close.rolling(window=60).mean()
-    df['MA200'] = close.rolling(window=200).mean()
     
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -69,65 +77,22 @@ def calculate_indicators(df):
     
     direction = (delta > 0).astype(int) - (delta < 0).astype(int)
     df['OBV'] = (vol * direction).cumsum()
-    
     df['Vol_MA5'] = vol.rolling(window=5).mean()
     df['Vol_Ratio'] = (vol / df['Vol_MA5']) * 100
     
     return df
 
-def calculate_quant_score(df):
-    if len(df) < 5: return 0
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    score = 0
-    
-    if not pd.isna(latest['RSI']):
-        if latest['RSI'] < 30: score += 25
-        elif latest['RSI'] < 50: score += 15
-        elif latest['RSI'] < 70: score += 5
-        
-    if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
-        if latest['MACD'] > latest['Signal']: score += 25
-        
-    if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: 
-        score += 30
-        
-    if not pd.isna(latest['Vol_Ratio']):
-        if latest['Vol_Ratio'] >= 150 and latest['Close'] > prev['Close']:
-            score += 20
-            
-    return score
-
-def detect_patterns_and_levels(df):
-    if len(df) < 60: return [], 0, 0
-    latest = df.iloc[-1]
-    patterns = []
-    body = abs(latest['Open'] - latest['Close'])
-    lower_shadow = min(latest['Open'], latest['Close']) - latest['Low']
-    upper_shadow = latest['High'] - max(latest['Open'], latest['Close'])
-    
-    if lower_shadow > body * 2 and upper_shadow < body:
-        patterns.append("🔨 망치형 (바닥권 반등 신호)")
-    if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]:
-        patterns.append("🚀 상승 장악형 (추세 전환)")
-        
-    support = df['Low'].tail(60).min()
-    resistance = df['High'].tail(60).max()
-    return patterns, support, resistance
-
 @st.cache_data(ttl=60)
-def get_stock_data(code, mode):
-    days = 730 if "장기" in mode else 365
-    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+def get_stock_data(code):
+    # 🌟 개선: 탐색을 위해 기본적으로 5년치 데이터를 불러옵니다.
+    start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
         if df.empty: return pd.DataFrame()
-        if df.index.tz is not None: df.index = df.index.tz_localize(None)
         return calculate_indicators(df)
     except: return pd.DataFrame()
 
-# 🌟 수정: 수치를 포함한 상세 분석 로직
-def generate_signal_and_comments(df, mode):
+def generate_signal_and_comments(df):
     latest = df.iloc[-1]
     close = float(latest['Close'])
     rsi = float(latest['RSI'])
@@ -140,50 +105,39 @@ def generate_signal_and_comments(df, mode):
 
     comments = {}
     
-    # RSI 상세 분석
-    if pd.isna(rsi): comments['RSI'] = "데이터 부족"
-    elif rsi >= 70: comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 지수가 70을 넘어 단기 과열권입니다. 추격 매수보다는 수익 실현을 고려할 시점입니다."
-    elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 이하로 공포 구간입니다. 기술적 반등 가능성이 매우 높습니다."
-    else: comments['RSI'] = f"📈 **정상 범위 (RSI: {rsi:.1f})**: 매수/매도세가 균형을 이루고 있습니다."
+    # RSI 수치 포함 상세 분석
+    if rsi >= 70: comments['RSI'] = f"🔥 **과매수 (RSI: {rsi:.1f})**: 지수가 70을 초과했습니다. 단기 고점 신호일 수 있으니 주의가 필요합니다."
+    elif rsi <= 30: comments['RSI'] = f"❄️ **과매도 (RSI: {rsi:.1f})**: 지수가 30 미만입니다. 과도한 낙폭에 따른 기술적 반등 구간입니다."
+    else: comments['RSI'] = f"📈 **안정적 (RSI: {rsi:.1f})**: 매수/매도 세력이 균형을 이루며 추세를 탐색 중입니다."
 
     # MACD 상세 분석
     macd_diff = macd - signal
-    if macd > signal:
-        comments['MACD'] = f"🚀 **상승 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선을 상향 돌파하여 긍정적인 흐름을 유지하고 있습니다."
-    else:
-        comments['MACD'] = f"⚠️ **하락 추세 (차이: {macd_diff:.2f})**: MACD가 시그널선 아래에 위치하여 단기 조정 압력이 존재합니다."
+    comments['MACD'] = f"🚀 **상승세** (차이: {macd_diff:.2f})" if macd > signal else f"⚠️ **하락세** (차이: {macd_diff:.2f})"
 
-    # 거래량 및 OBV 상세 분석
-    obv_status = "상승" if obv > prev_obv else "하락"
-    comments['VOL'] = f"🌋 **상대 거래량 ({vol_ratio:.0f}%)**: 평소 거래량 대비 유의미한 에너지가 포착되었습니다." if vol_ratio > 150 else f"➖ **보통 거래량 ({vol_ratio:.0f}%)**: 평이한 수준의 거래가 이뤄지고 있습니다."
-    comments['OBV'] = f"🕵️‍♂️ **매집 확인**: 최근 5일간 누적 OBV가 {obv_status}하며 자금이 유입되는 흐름입니다."
+    # 거래량 및 변동성
+    comments['VOL'] = f"🌋 **상대 거래량 {vol_ratio:.0f}%**" if vol_ratio > 150 else f"➖ **평이한 거래량 {vol_ratio:.0f}%**"
+    comments['ATR'] = f"현재 일평균 **{int(atr)}원 ({(atr/close*100):.1f}%)** 정도의 변동성을 보입니다."
 
-    # 변동성 상세 분석
-    volatility_pct = (atr / close) * 100
-    comments['ATR'] = f"현재 주가는 일평균 **{volatility_pct:.1f}% ({int(atr)}원)** 정도의 변동폭을 보이며 움직이고 있습니다."
+    # 매매 전략
+    position, reason = "⚖️ 관망", "주요 지표가 중립 상태입니다."
+    if rsi < 45 and macd > signal: position, reason = "🔴 적극 매수", f"RSI({rsi:.1f}) 바닥권에서 MACD 골든크로스가 포착되었습니다."
+    elif rsi > 65 and macd < signal: position, reason = "🔷 적극 매도", f"RSI({rsi:.1f}) 과열권에서 추세 하락이 감지되었습니다."
 
-    # 매매 전략 결정
-    position, reason = "⚖️ 관망", "주요 지표의 방향성이 엇갈리고 있습니다."
-    t_buy, t_sell, s_loss = close * 0.95, close * 1.05, close * 0.90
-    
-    if rsi < 40 and macd > signal:
-        position, reason = "🔴 적극 매수", f"RSI({rsi:.1f}) 저평가 구간에서 MACD 골든크로스가 발생했습니다."
-    elif rsi > 70 and macd < signal:
-        position, reason = "🔷 적극 매도", f"RSI({rsi:.1f}) 과열권에서 추세가 꺾이기 시작했습니다."
-
-    return position, t_buy, t_sell, s_loss, reason, rsi, atr, comments
+    return position, reason, comments
 
 # ==========================================
 # 3. 사이드바 및 실행 UI
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 분석 설정")
-    analyze_mode = st.radio("투자 성향", ["단기/스윙 (6개월)", "장기 투자 (2년)"])
+    st.header("⚙️ StockMap 설정")
+    analyze_mode = st.radio("초기 차트 범위", ["단기 (6개월)", "장기 (2년)"])
     new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, 005930 등")
     target_query = new_search if st.button("🚀 분석 실행", type="primary", use_container_width=True) else None
-    st.divider()
-    for item in st.session_state.recent_searches:
-        if st.button(f"▪️ {item['display_name']}", use_container_width=True): target_query = item['query']
+    
+    if st.session_state.recent_searches:
+        st.divider()
+        for item in st.session_state.recent_searches:
+            if st.button(f"▪️ {item['display_name']}", use_container_width=True): target_query = item['query']
 
 if target_query:
     display_name, ticker_symbol, raw_query = parse_query(target_query)
@@ -191,72 +145,75 @@ if target_query:
         st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
         st.session_state.recent_searches = st.session_state.recent_searches[:5]
 
-    with st.spinner(f"📡 '{display_name}' 퀀트 분석 중..."):
-        df = get_stock_data(ticker_symbol, analyze_mode)
+    with st.spinner(f"📡 '{display_name}' 데이터를 지도로 그리는 중..."):
+        df = get_stock_data(ticker_symbol)
         
     if df.empty:
-        st.error("데이터를 찾을 수 없습니다.")
+        st.error("데이터를 불러오지 못했습니다. 종목명을 정확히 입력해주세요.")
     else:
         cur_price = df['Close'].iloc[-1]
         diff = cur_price - df['Close'].iloc[-2]
-        currency = "원"
         
         st.subheader(f"📑 {display_name} 리포트")
-        st.metric("현재 주가", f"{cur_price:,.0f} {currency}", f"{diff:,.0f} {currency}")
+        # 🌟 다크모드에서도 잘 보이도록 수정된 메트릭
+        st.metric("현재 주가", f"{cur_price:,.0f} 원", f"{diff:,.0f} 원")
 
-        q_score = calculate_quant_score(df)
-        st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
-        st.progress(q_score / 100)
-
-        pos, buy, sell, stop, reason, rsi, atr, comments = generate_signal_and_comments(df, analyze_mode)
-        pts, sup, res = detect_patterns_and_levels(df)
+        pos, reason, comments = generate_signal_and_comments(df)
         
         col1, col2 = st.columns(2)
         with col1:
             with st.container(border=True):
-                st.markdown("### 🎯 **종합 매매 타이밍**")
-                st.warning(f"**포지션: {pos}**\n\n**상세의견:** {reason}")
-                st.write(f"진입가: {buy:,.0f} | 목표가: {sell:,.0f}\n\n손절가: {stop:,.0f}")
+                st.markdown("### 🎯 **종합 전략**")
+                st.warning(f"**포지션: {pos}**\n\n**의견:** {reason}")
                 
         with col2:
             with st.container(border=True):
-                st.markdown("### 🔍 **차트 패턴 및 지지/저항**")
-                p_text = ", ".join(patterns) if (patterns := pts) else "특이 패턴 없음"
-                st.write(f"📍 **패턴:** {p_text}")
-                st.write(f"🛡️ **지지:** {sup:,.0f} | 🚧 **저항:** {res:,.0f}")
+                st.markdown("### 🔍 **지표 분석 요약**")
+                st.write(f"**RSI:** {comments['RSI']}")
+                st.write(f"**MACD:** {comments['MACD']}")
 
-        with st.expander("🔬 지표별 상세 수치 분석", expanded=True):
-            # 🌟 수치 중심의 상세 설명 UI
-            st.write(f"**[상대 거래량]** {comments.get('VOL')}")
-            st.write(f"**[OBV 누적]** {comments.get('OBV')}")
-            st.write(f"**[RSI 강도]** {comments.get('RSI')}")
-            st.write(f"**[MACD 흐름]** {comments.get('MACD')}")
-            st.write(f"**[ATR 변동성]** {comments.get('ATR')}")
+        with st.expander("🔬 기술적 지표 상세 데이터 보기", expanded=True):
+            st.write(f"**[상대 거래량]** {comments['VOL']}")
+            st.write(f"**[변동성(ATR)]** {comments['ATR']}")
 
-        # 🌟 스마트폰용 핀치 줌 지원 차트
-        tab1, tab2 = st.tabs(["주가 차트", "수급(OBV) 차트"])
-        chart_df = df.tail(100)
+        # 🌟 차트 기간 확장 및 초기 뷰포트 설정
+        tab1, tab2 = st.tabs(["주가 맵 (확대/축소 가능)", "수급 에너지"])
+        
+        # 초기 보여줄 날짜 계산
+        view_days = 180 if "단기" in analyze_mode else 730
+        initial_start_date = (datetime.now() - timedelta(days=view_days))
         
         with tab1:
-            fig = go.Figure(data=[go.Candlestick(x=chart_df.index, open=chart_df['Open'], high=chart_df['High'], low=chart_df['Low'], close=chart_df['Close'], name='주가')])
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA20'], name='20일선', line=dict(color='orange')))
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['MA60'], name='60일선', line=dict(color='green')))
+            fig = go.Figure(data=[go.Candlestick(
+                x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='주가'
+            )])
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20일선', line=dict(color='orange', width=1)))
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60일선', line=dict(color='green', width=1)))
             
             fig.update_layout(
-                height=450, 
-                xaxis_rangeslider_visible=False, 
+                height=500,
+                xaxis=dict(
+                    rangeslider=dict(visible=False),
+                    range=[initial_start_date, datetime.now()] # 🌟 초기 범위는 6개월/2년이지만 전체 탐색 가능
+                ),
                 margin=dict(t=10, b=10, l=0, r=0),
-                dragmode='pan', # 모바일 드래그 이동 우선
-                hovermode='x unified'
+                dragmode='pan',
+                hovermode='x unified',
+                template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white"
             )
             
             st.plotly_chart(fig, use_container_width=True, config={
-                'scrollZoom': True, # 🌟 핀치 줌 활성화
-                'displayModeBar': False,
-                'doubleClick': 'reset+autosize'
+                'scrollZoom': True, # 🌟 핀치 줌 지원
+                'displayModeBar': False
             })
             
         with tab2:
-            obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-            obv_fig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode='pan')
+            obv_fig = go.Figure(data=[go.Scatter(x=df.index, y=df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
+            obv_fig.update_layout(
+                height=350, 
+                xaxis=dict(range=[initial_start_date, datetime.now()]),
+                margin=dict(t=10, b=10, l=0, r=0), 
+                dragmode='pan',
+                template="plotly_dark" if st.get_option("theme.base") == "dark" else "plotly_white"
+            )
             st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
