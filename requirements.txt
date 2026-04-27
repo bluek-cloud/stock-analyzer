@@ -4,4 +4,3 @@ pandas
 plotly
 finance-datareader
 requests
-pykrx
