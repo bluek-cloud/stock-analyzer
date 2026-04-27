@@ -19,6 +19,13 @@ st.markdown("""
         padding: 10px; border-radius: 10px; 
         border: 1px solid rgba(128, 128, 128, 0.2); 
     }
+    .macro-panel {
+        padding: 15px;
+        border-radius: 10px;
+        background-color: rgba(0, 150, 255, 0.05);
+        border: 1px solid rgba(0, 150, 255, 0.1);
+        margin-bottom: 20px;
+    }
     .style-box {
         padding: 12px;
         border-radius: 8px;
@@ -31,14 +38,51 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📈 StockMap")
+# ==========================================
+# 2. 글로벌 매크로 패널
+# ==========================================
+@st.cache_data(ttl=3600)
+def get_macro_data():
+    try:
+        kospi = fdr.DataReader('KS11').tail(2)
+        sp500 = fdr.DataReader('US500').tail(2)
+        usdkrw = fdr.DataReader('USD/KRW').tail(2)
+        vix = fdr.DataReader('^VIX').tail(2)
+        return kospi, sp500, usdkrw, vix
+    except:
+        return None, None, None, None
+
+st.title("📈 StockMap Dashboard")
+
+m_kospi, m_sp500, m_usd, m_vix = get_macro_data()
+
+if m_kospi is not None:
+    with st.container():
+        st.markdown('<div class="macro-panel">', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        
+        def get_delta(df):
+            val = df['Close'].iloc[-1]
+            diff = val - df['Close'].iloc[-2]
+            return val, diff
+
+        v, d = get_delta(m_kospi)
+        c1.metric("KOSPI", f"{v:,.2f}", f"{d:+.2f}")
+        v, d = get_delta(m_sp500)
+        c2.metric("S&P 500", f"{v:,.2f}", f"{d:+.2f}")
+        v, d = get_delta(m_usd)
+        c3.metric("USD/KRW", f"{v:,.1f}원", f"{d:+.1f}")
+        v, d = get_delta(m_vix)
+        c4.metric("VIX (공포지수)", f"{v:,.2f}", f"{d:+.2f}", delta_color="inverse")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
 
 # ==========================================
-# 2. 데이터 처리 및 지표 계산 함수
+# 3. 데이터 처리 및 지표 계산 함수
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_krx_data():
@@ -57,7 +101,7 @@ def parse_query(query):
         return f"{query} ({code})", code, query, "원", 0
     return f"{query} (해외)", query, query, "$", 2
 
-def calculate_indicators(df, rsi_period=14):
+def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
     close = df['Close'].squeeze()
     
@@ -66,8 +110,8 @@ def calculate_indicators(df, rsi_period=14):
     df['MA200'] = close.rolling(window=200).mean()
     
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
     
     exp1 = close.ewm(span=12, adjust=False).mean()
@@ -117,7 +161,6 @@ def detect_patterns_and_levels(df):
 
 @st.cache_data(ttl=60)
 def get_stock_data(code):
-    # RSI 등 지표 계산을 위해 과거 5년치 데이터를 가져오지만 화면 출력은 선택 기간으로 제한함
     start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start=start_date)
@@ -194,7 +237,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     return position, strategy, comments
 
 # ==========================================
-# 3. 사이드바 및 실행 UI
+# 4. 사이드바 및 실행 UI
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정")
@@ -210,10 +253,6 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    st.divider()
-    st.subheader("💡 지표 설정")
-    user_rsi_period = st.number_input("RSI 기간", min_value=5, max_value=50, value=14, step=1)
-    
     target_query = new_search if run_btn else None
     
     st.divider()
@@ -223,7 +262,7 @@ with st.sidebar:
             target_query = item['query']
 
 # ==========================================
-# 4. 메인 화면 분석 결과 출력
+# 5. 메인 화면 분석 결과 출력
 # ==========================================
 if target_query:
     display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
@@ -242,11 +281,11 @@ if target_query:
         
         if not is_short_term:
             chart_df = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-            chart_df = calculate_indicators(chart_df, rsi_period=user_rsi_period)
-            default_days = 730
+            chart_df = calculate_indicators(chart_df)
+            default_days = 730 # 2년
         else:
-            chart_df = calculate_indicators(raw_df.copy(), rsi_period=user_rsi_period)
-            default_days = 180
+            chart_df = calculate_indicators(raw_df.copy())
+            default_days = 180 # 6개월
 
         cur_price = raw_df['Close'].iloc[-1]
         diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
@@ -281,7 +320,7 @@ if target_query:
             st.info(comments.get('AI'))
 
         # ==========================================
-        # 🌟 모바일 최적화 자동 스케일링 차트 (드래그 완전 차단)
+        # 🌟 완전 고정형 및 능동 반응형 차트 (이동/확대 차단)
         # ==========================================
         tab1, tab2 = st.tabs(["📈 주가 & RSI 차트", "📊 수급 에너지(OBV)"])
         
@@ -289,17 +328,15 @@ if target_query:
         calculated_start_date = datetime.now() - timedelta(days=default_days)
         final_start_date = max(data_start_date, calculated_start_date)
         
-        # 🌟 핵심: 표시할 구간(6개월/2년)의 데이터만 추출하여 Y축의 정확한 최고점/최저점 계산
+        # 🌟 핵심: 화면에 보이는 데이터(6개월 or 2년) 기준 최고/최저점 자동 계산 (능동적 Y축)
         visible_df = chart_df[chart_df.index >= final_start_date]
         if not visible_df.empty:
-            # 캔들의 저점/고점뿐만 아니라 화면에 그려지는 이동평균선 값도 포함하여 잘림 방지
             min_vals = visible_df[['Low', 'MA20', 'MA60']].min()
             max_vals = visible_df[['High', 'MA20', 'MA60']].max()
             c_min = min_vals.min()
             c_max = max_vals.max()
-            
-            # 위아래로 2%의 여백(Padding)을 주어 차트가 답답해 보이지 않게 세팅
-            padding = (c_max - c_min) * 0.02
+            # 위아래로 5%의 여백을 주어 캔들이 잘리지 않게 조정
+            padding = (c_max - c_min) * 0.05
             y_range = [c_min - padding, c_max + padding]
         else:
             y_range = None
@@ -321,14 +358,14 @@ if target_query:
             fig.update_layout(
                 height=550, 
                 margin=dict(t=10, b=10, l=0, r=0), 
-                dragmode=False, # 🌟 차트 스와이프/이동 완전 차단
+                dragmode=False, # 🌟 차트 마우스 드래그/스와이프 완벽 차단
                 hovermode='x unified', showlegend=False
             )
             
-            # 모든 축의 이동 및 확대를 잠금 (fixedrange=True 적용)
+            # 모든 축 고정 (fixedrange=True)
             fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
             fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
-            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # AI가 계산한 능동적 Y축 여백 적용
+            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1) # 🌟 능동적 Y축 스케일링 적용
             fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
             
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
@@ -338,7 +375,7 @@ if target_query:
                 obv_fig = go.Figure(data=[go.Scatter(x=chart_df.index, y=chart_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
                 obv_fig.update_layout(
                     height=350, margin=dict(t=10, b=10, l=0, r=0), 
-                    dragmode=False, # 차트 이동 차단
+                    dragmode=False, # 🌟 이동 차단
                     hovermode='x unified'
                 )
                 obv_fig.update_xaxes(range=[final_start_date, datetime.now()], fixedrange=True)
