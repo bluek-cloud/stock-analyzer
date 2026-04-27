@@ -130,9 +130,54 @@ def detect_patterns_and_levels(df):
     if lower_shadow > body * 2 and upper_shadow < body: patterns.append("🔨 망치형 (바닥권 반등 신호)")
     if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
     
+    # 🌟 개선 4: 단순 min/max 대신 클러스터링 기반 지지/저항 탐지
+    # 여러 번 터치된 가격대를 군집화하여 신뢰도 높은 지지/저항선을 산출합니다.
     past_df = df.iloc[-61:-1] if len(df) > 60 else df.iloc[:-1]
-    support = past_df['Close'].min() if not past_df.empty else latest['Close']
-    resistance = past_df['Close'].max() if not past_df.empty else latest['Close']
+    if past_df.empty:
+        return patterns, latest['Close'], latest['Close']
+    
+    # 로컬 저점(지지 후보)과 고점(저항 후보) 수집
+    closes = past_df['Close']
+    tolerance = closes.mean() * 0.02  # 가격 평균의 2% 이내를 같은 클러스터로 묶음
+
+    def cluster_levels(price_series):
+        """가격 리스트를 tolerance 범위로 군집화 → 가장 많이 터치된 레벨 반환"""
+        prices = sorted(price_series.tolist())
+        clusters = []
+        for p in prices:
+            matched = False
+            for c in clusters:
+                if abs(p - c['center']) <= tolerance:
+                    c['prices'].append(p)
+                    c['center'] = sum(c['prices']) / len(c['prices'])
+                    matched = True
+                    break
+            if not matched:
+                clusters.append({'center': p, 'prices': [p]})
+        # 터치 횟수(길이) 기준 내림차순 정렬
+        clusters.sort(key=lambda x: len(x['prices']), reverse=True)
+        return clusters
+
+    # 저점들(지지): 전후 1봉보다 낮은 봉
+    low_mask = (closes < closes.shift(1)) & (closes < closes.shift(-1))
+    support_candidates = closes[low_mask]
+
+    # 고점들(저항): 전후 1봉보다 높은 봉
+    high_mask = (closes > closes.shift(1)) & (closes > closes.shift(-1))
+    resistance_candidates = closes[high_mask]
+
+    if len(support_candidates) >= 2:
+        sup_clusters = cluster_levels(support_candidates)
+        support = sup_clusters[0]['center']  # 가장 많이 터치된 지지 레벨
+    else:
+        support = closes.min()  # 후보가 부족하면 최솟값 fallback
+
+    if len(resistance_candidates) >= 2:
+        res_clusters = cluster_levels(resistance_candidates)
+        resistance = res_clusters[0]['center']  # 가장 많이 터치된 저항 레벨
+    else:
+        resistance = closes.max()  # 후보가 부족하면 최댓값 fallback
+
     return patterns, support, resistance
 
 @st.cache_data(ttl=60)
@@ -155,20 +200,46 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     atr = float(latest['ATR']) if not pd.isna(latest['ATR']) else 0
     obv = float(latest['OBV']) if not pd.isna(latest['OBV']) else 0
     
-    # 🌟 핵심 수정 1: OBV 수급 민감도를 최대로 끌어올림 (20 -> 5로 축소)
-    # 이제 최근 5일(주)간의 생생한 수급 흐름만 비교하여 모순된 의견을 제거합니다.
+    # 🌟 개선 2: 단기/장기 OBV lookback 분리
+    # 단기(일봉): 최근 5일로 민감하게 / 장기(주봉): 1분기(13주)로 노이즈 필터링
     simple_lookback = min(5, len(df) - 1) if len(df) > 1 else 1
-    simple_prev_obv = float(df['OBV'].iloc[-simple_lookback])
+    long_lookback   = min(13, len(df) - 1) if len(df) > 1 else 1
+    obv_lookback    = simple_lookback if is_short_term else long_lookback
+    simple_prev_obv = float(df['OBV'].iloc[-obv_lookback])
     
+    # 🌟 개선 1: 다이버전스를 단일 저점 비교에서 '2개 로컬 저점' 비교 구조로 개선
+    # 진짜 다이버전스는 저점이 두 번 형성될 때 의미를 가집니다.
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
-    if swing_lookback > 1:
+    prev_close, prev_obv, prev_rsi = close, obv, rsi  # 기본값
+    if swing_lookback > 5:
         past_df = df.iloc[-swing_lookback:-1]
-        min_idx = past_df['Close'].idxmin()
-        prev_close = float(df.loc[min_idx, 'Close'])
-        prev_obv = float(df.loc[min_idx, 'OBV'])
-        prev_rsi = float(df.loc[min_idx, 'RSI']) if not pd.isna(df.loc[min_idx, 'RSI']) else 50
-    else:
-        prev_close, prev_obv, prev_rsi = close, obv, rsi
+        # 로컬 저점: 전후 2봉보다 낮은 봉을 저점으로 판별
+        local_min_mask = (
+            (past_df['Close'] < past_df['Close'].shift(1)) &
+            (past_df['Close'] < past_df['Close'].shift(2)) &
+            (past_df['Close'] < past_df['Close'].shift(-1)) &
+            (past_df['Close'] < past_df['Close'].shift(-2))
+        )
+        local_min_df = past_df[local_min_mask]
+        if len(local_min_df) >= 2:
+            # 가장 최근 두 로컬 저점을 사용
+            trough1_idx = local_min_df.index[-2]  # 과거 저점
+            trough2_idx = local_min_df.index[-1]  # 최근 저점
+            prev_close = float(df.loc[trough1_idx, 'Close'])
+            prev_obv   = float(df.loc[trough1_idx, 'OBV'])
+            prev_rsi   = float(df.loc[trough1_idx, 'RSI']) if not pd.isna(df.loc[trough1_idx, 'RSI']) else 50
+            # 다이버전스 판별을 위한 최근 저점도 저장
+            trough2_close = float(df.loc[trough2_idx, 'Close'])
+            trough2_obv   = float(df.loc[trough2_idx, 'OBV'])
+            trough2_rsi   = float(df.loc[trough2_idx, 'RSI']) if not pd.isna(df.loc[trough2_idx, 'RSI']) else 50
+            # 최근 저점을 prev 기준으로 사용 (저점1 → 저점2 비교)
+            prev_close, prev_obv, prev_rsi = trough2_close, trough2_obv, trough2_rsi
+        elif len(local_min_df) == 1:
+            # 저점이 1개뿐이면 그것과 현재를 비교 (기존 방식 fallback)
+            min_idx = local_min_df.index[-1]
+            prev_close = float(df.loc[min_idx, 'Close'])
+            prev_obv   = float(df.loc[min_idx, 'OBV'])
+            prev_rsi   = float(df.loc[min_idx, 'RSI']) if not pd.isna(df.loc[min_idx, 'RSI']) else 50
 
     comments = {}
     
@@ -189,7 +260,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     else: comments['VOL'] += "평이한 수준의 거래가 이뤄지고 있습니다. 횡보 장세가 예상됩니다."
 
     obv_trend = "유입" if obv > simple_prev_obv else "이탈"
-    comments['OBV'] = f"최근 {simple_lookback}{time_unit}간 누적 OBV 수치가 **{'상승' if obv > simple_prev_obv else '하락'}**하며 자금이 **{obv_trend}**되고 있습니다. "
+    comments['OBV'] = f"최근 {obv_lookback}{time_unit}간 누적 OBV 수치가 **{'상승' if obv > simple_prev_obv else '하락'}**하며 자금이 **{obv_trend}**되고 있습니다. "
     if obv > simple_prev_obv: comments['OBV'] += "주가 움직임보다 앞서 수급이 개선되는 긍정적인 '숨은 매집' 단계일 가능성이 큽니다."
     else: comments['OBV'] += "주가가 버티더라도 스마트 머니는 이탈 중일 수 있으니 주의가 필요합니다."
 
@@ -202,7 +273,17 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 핵심 수정 2: '단기 분할 매수' 허들 대폭 상향 (추세선(MA20) 안착 필수)
+    # 🌟 개선 3: 퀀트 스코어를 포지션 신뢰도 보조 필터로 연동
+    # 스코어가 포지션 방향과 심하게 불일치하면 관망으로 하향 조정합니다.
+    q_score = calculate_quant_score(df, is_short_term)
+    buy_positions  = {"🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 비중 확대 (장기)", "🟠 저점 매수 (장기)"}
+    sell_positions = {"🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔷 비중 축소 (장기)"}
+    if pos in buy_positions and q_score < 30:
+        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
+        strategy = f"매수 신호가 감지되었으나 퀀트 스코어({q_score}점)가 낮아 신뢰도가 부족합니다. 추가 확인 후 진입하세요."
+    elif pos in sell_positions and q_score > 70:
+        pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
+        strategy = f"매도 신호가 감지되었으나 퀀트 스코어({q_score}점)가 높아 신호가 상충합니다. 방향성 확인 후 대응하세요."
     if is_short_term:
         ma20 = latest['MA20'] if not pd.isna(latest['MA20']) else close
         pos, strategy = "⚖️ 단기 관망", "뚜렷한 방향성이 확인되지 않아 관망을 권장합니다."
