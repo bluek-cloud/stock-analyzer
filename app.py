@@ -255,6 +255,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     simple_prev_obv = float(df['OBV'].iloc[-obv_lookback])
     
     prev_candle_close = float(df['Close'].iloc[-2]) if len(df) > 1 else close
+    prev_ma20 = float(df['MA20'].iloc[-2]) if len(df) > 1 and not pd.isna(df['MA20'].iloc[-2]) else ma20
+    prev_candle_obv = float(df['OBV'].iloc[-2]) if len(df) > 1 else obv
 
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
     prev_close, prev_obv, prev_rsi = close, obv, rsi  
@@ -334,10 +336,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
     near_sup = abs(dist_to_sup) <= 5 
     
-    # 🌟 다이버전스 판별
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 핵심 수정: 다이버전스가 발생하면 국면 엔진의 [관망]을 뚫고 선취매/매수 포지션을 강제로 배정
     if is_short_term:
         if regime == "에너지 응축 (스퀴즈)":
             if bullish_div:
@@ -380,7 +380,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         "🔴 추세 눌림목 적극 매수", "🟠 단기 박스권 하단 매수",
         "🔴 비중 확대 (장기)", "🟠 저점 분할 매집",
         "🔴 돌파 추세 추종", "🟠 데드캣 바운스 노림",
-        "🔴 응축 구간 선취매" # 🌟 필터망 업데이트 완료
+        "🔴 응축 구간 선취매"
     }
     sell_positions = {
         "🔷 단기 적극 매도", "🔵 단기 분할 매도",
@@ -438,9 +438,37 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     else: ai_op += "• **세력수급:** 누적 수급이 지속적으로 이탈 중이므로 어설픈 '가짜 반등'에 속지 않도록 유의해야 합니다.\n\n"
     if regime in ["강세 추세", "상승 조정"] and obv < simple_prev_obv:
         ai_op += "⚠️ **[지표 충돌 경고]** 추세는 상승 중이나 수급(OBV)이 은밀히 이탈 중입니다. 수급 없는 억지 상승일 수 있으므로 주의하세요.\n\n"
-        
-    ai_op += f"• **핵심레벨:** 1차 지지선은 **{sup:,.{decimals}f}{currency}**, 1차 저항선은 **{res:,.{decimals}f}{currency}**에 튼튼하게 형성되어 있습니다.\n\n"
-    ai_op += f"• **손절기준:** 현재 실질 변동폭(ATR)인 **{vol_pct:.1f}%**를 감안하여 휩소(속임수)에 털리지 않게 넉넉히 리스크를 설정하세요.\n\n"
+
+    # 🌟 고도화 2: 역사적 극단값(Outlier) 맥락 판독기 
+    lookback_1y = min(240 if is_short_term else 52, len(df))
+    df_1y = df.iloc[-lookback_1y:]
+    rsi_pct = (df_1y['RSI'].rank(pct=True).iloc[-1] * 100) if not pd.isna(df_1y['RSI'].iloc[-1]) else 50
+    bbw_pct = (df_1y['BBW'].rank(pct=True).iloc[-1] * 100) if not pd.isna(df_1y['BBW'].iloc[-1]) else 50
+    
+    outlier_text = ""
+    if rsi_pct <= 5: outlier_text += f"• **[공포 극단값]** 현재 RSI는 최근 1년 데이터 중 하위 {rsi_pct:.1f}%에 해당하는 역사적 과매도 상태입니다. 펀더멘털 문제가 아니라면 기술적 반등 확률이 극도로 높습니다.\n\n"
+    elif rsi_pct >= 95: outlier_text += f"• **[탐욕 극단값]** 현재 RSI는 최근 1년 중 상위 {rsi_pct:.1f}%에 달하는 역사적 과매수 상태입니다. 단기 고점 징후이므로 급격한 차익 실현 물량에 대비하시길 바랍니다.\n\n"
+    if bbw_pct <= 2: outlier_text += f"• **[변동성 최저치]** 현재 볼린저 밴드 폭이 최근 1년 중 가장 좁은 하위 {bbw_pct:.1f}% 수준으로 완벽하게 응축되었습니다. 거대한 시세 분출이 '임박'했습니다.\n\n"
+
+    # 🌟 고도화 3: 세력 트랩(Fake-out) 판독기
+    fakeout_text = ""
+    if close > prev_candle_close and close > ma20 and prev_candle_close <= prev_ma20:
+        if obv < prev_candle_obv or vol_ratio < 100:
+            fakeout_text += "🚨 **[불 트랩(가짜 상승) 경계 발령]** 주가가 주요 저항인 20일선을 돌파했으나, 세력 수급(OBV)이 받쳐주지 않거나 거래량이 부진합니다. 추격 매수를 유도하기 위한 '가짜 돌파(Bull Trap)'일 확률이 높으니 속지 마십시오.\n\n"
+    elif close < prev_candle_close and close < ma20 and prev_candle_close >= prev_ma20:
+        if obv > prev_candle_obv and vol_ratio < 100:
+            fakeout_text += "🚨 **[베어 트랩(가짜 하락) 경계 발령]** 주가가 20일선을 이탈하며 시장에 공포를 유발하고 있지만, 수급(OBV)은 오히려 들어오고 투매(거래량) 흔적도 없습니다. 개미 털기용 '가짜 하락(Bear Trap)'일 수 있으니 섣부른 손절을 보류하시길 권장합니다.\n\n"
+
+    if outlier_text or fakeout_text:
+        ai_op += f"🔬 **[심층 맥락 및 세력 트랩 판독기]**\n\n"
+        ai_op += outlier_text + fakeout_text
+
+    # 🌟 고도화 1: D+1 실전 대응 시나리오 (Playbook)
+    playbook_text = f"📅 **[내일(D+1) 실전 대응 시나리오]**\n\n"
+    playbook_text += f"• **플랜 A (상방 돌파 시):** 주가가 1차 저항인 **{res:,.{decimals}f}{currency}** 선을 강하게 돌파하며 거래량이 급증할 경우, 새로운 파동의 시작으로 간주하고 **'돌파 매수(Breakout)'** 또는 홀딩 비중 확대를 고려하십시오.\n\n"
+    playbook_text += f"• **플랜 B (하방 이탈 시):** 주가가 1차 지지인 **{sup:,.{decimals}f}{currency}** 선 아래로 밀릴 경우, 즉각 매수를 중단하고 관망해야 합니다. 하방 변동성(ATR)을 감안한 1차 기계적 손절 방어선은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근으로 설정하는 것을 권장합니다.\n\n"
+    
+    ai_op += playbook_text
 
     if bullish_div and regime != "약세 추세": 
         ai_op += "🔥 **[특급 패턴: 상승 다이버전스 포착]** 스윙 로우 대비 주가는 내렸으나 지표가 오르는 강력한 반전(매수) 시그널이 확인되었습니다!\n\n"
