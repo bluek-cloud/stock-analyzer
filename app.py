@@ -35,11 +35,12 @@ st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
-
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'trigger_search' not in st.session_state:
     st.session_state.trigger_search = False
+if 'target_query' not in st.session_state:       # ← 추가: 재실행 후에도 분석 유지
+    st.session_state.target_query = None
 
 def on_recent_click(query):
     st.session_state.search_query = query
@@ -459,16 +460,18 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    target_query = None
+    # 버튼/최근검색 클릭 시에만 target_query 갱신, 아니면 기존 값 유지
     if run_btn or st.session_state.trigger_search:
-        target_query = st.session_state.search_query
+        st.session_state.target_query = st.session_state.search_query
         st.session_state.trigger_search = False
         
-        if target_query:
-            display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
+        if st.session_state.target_query:
+            display_name, ticker_symbol, raw_query, currency, decimals = parse_query(st.session_state.target_query)
             if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
                 st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
                 st.session_state.recent_searches = st.session_state.recent_searches[:5]
+    
+    target_query = st.session_state.target_query  # 재실행 후에도 이전 값 유지
     
     st.divider()
     st.subheader("🕒 최근 검색")
