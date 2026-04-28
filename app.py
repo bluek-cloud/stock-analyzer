@@ -402,6 +402,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"🔍 **[시장 국면 분류]**\n\n"
     ai_op += f"• ADX 추세 강도({adx:.1f})와 이평선 배열을 종합 분석한 결과, 현재 이 종목은 **[{regime}]** 국면에 있습니다.\n\n"
     
+    # 🌟 핵심 수정: 누락된 국면에 대한 MTF 브리핑 추가
     if is_short_term and weekly_bullish is not None:
         ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
         if regime in ["강세 추세", "상승 조정"]: 
@@ -414,6 +415,21 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
                 ai_op += "• **장기 상승장 속 눌림목:** 일봉은 약세이나 주봉(장기)은 굳건한 상승장입니다. 장기 투자자에게는 매력적인 할인(눌림목) 구간이 될 수 있습니다.\n\n"
             else:
                 ai_op += "• **완벽한 역배열:** 주봉과 일봉 모두 하락장입니다. 바닥을 섣불리 예측하지 말고 철저히 현금을 관망하세요.\n\n"
+        elif regime == "횡보 박스":
+            if weekly_bullish:
+                ai_op += "• **장기 상승장 속 기간 조정:** 주봉(장기) 추세는 살아있으나, 단기적으로 방향성을 탐색하며 쉬어가는 횡보 국면입니다.\n\n"
+            else:
+                ai_op += "• **장기 하락장 속 하방 경직:** 주봉(장기) 하락세 속에서 단기적으로 더 밀리지 않고 바닥을 다지려는 시도가 관찰됩니다.\n\n"
+        elif regime == "에너지 응축 (스퀴즈)":
+            if weekly_bullish:
+                ai_op += "• **장기 상승장 속 에너지 응축:** 큰 흐름은 상방을 가리키는 가운데 단기 에너지가 극도로 모이고 있습니다. 위로 터질 확률에 주목하세요.\n\n"
+            else:
+                ai_op += "• **장기 하락장 속 에너지 응축:** 장기 역배열 상태에서의 응축입니다. 섣부른 바닥 예측보다는 방향성이 터진 후 대응하는 것이 안전합니다.\n\n"
+        elif regime == "변동성 폭발":
+            if weekly_bullish:
+                ai_op += "• **장기 추세 동조화 폭발:** 장기 상승 추세의 에너지를 받아 단기 변동성이 강력하게 상방으로 분출할 가능성이 높습니다.\n\n"
+            else:
+                ai_op += "• **장기 역추세 변동성:** 장기 하락장 속에서 거친 변동성이 발생했습니다. 추세 전환의 신호인지 단순 휩소(속임수)인지 주의 깊게 판단해야 합니다.\n\n"
     
     ai_op += f"💡 **[국면 맞춤형 통합 해석]**\n\n"
     if regime == "에너지 응축 (스퀴즈)":
@@ -439,7 +455,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     if regime in ["강세 추세", "상승 조정"] and obv < simple_prev_obv:
         ai_op += "⚠️ **[지표 충돌 경고]** 추세는 상승 중이나 수급(OBV)이 은밀히 이탈 중입니다. 수급 없는 억지 상승일 수 있으므로 주의하세요.\n\n"
 
-    # 🌟 고도화 2: 역사적 극단값(Outlier) 맥락 판독기 
     lookback_1y = min(240 if is_short_term else 52, len(df))
     df_1y = df.iloc[-lookback_1y:]
     rsi_pct = (df_1y['RSI'].rank(pct=True).iloc[-1] * 100) if not pd.isna(df_1y['RSI'].iloc[-1]) else 50
@@ -450,7 +465,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif rsi_pct >= 95: outlier_text += f"• **[탐욕 극단값]** 현재 RSI는 최근 1년 중 상위 {rsi_pct:.1f}%에 달하는 역사적 과매수 상태입니다. 단기 고점 징후이므로 급격한 차익 실현 물량에 대비하시길 바랍니다.\n\n"
     if bbw_pct <= 2: outlier_text += f"• **[변동성 최저치]** 현재 볼린저 밴드 폭이 최근 1년 중 가장 좁은 하위 {bbw_pct:.1f}% 수준으로 완벽하게 응축되었습니다. 거대한 시세 분출이 '임박'했습니다.\n\n"
 
-    # 🌟 고도화 3: 세력 트랩(Fake-out) 판독기
     fakeout_text = ""
     if close > prev_candle_close and close > ma20 and prev_candle_close <= prev_ma20:
         if obv < prev_candle_obv or vol_ratio < 100:
@@ -463,7 +477,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += f"🔬 **[심층 맥락 및 세력 트랩 판독기]**\n\n"
         ai_op += outlier_text + fakeout_text
 
-    # 🌟 고도화 1: D+1 실전 대응 시나리오 (Playbook)
     playbook_text = f"📅 **[내일(D+1) 실전 대응 시나리오]**\n\n"
     playbook_text += f"• **플랜 A (상방 돌파 시):** 주가가 1차 저항인 **{res:,.{decimals}f}{currency}** 선을 강하게 돌파하며 거래량이 급증할 경우, 새로운 파동의 시작으로 간주하고 **'돌파 매수(Breakout)'** 또는 홀딩 비중 확대를 고려하십시오.\n\n"
     playbook_text += f"• **플랜 B (하방 이탈 시):** 주가가 1차 지지인 **{sup:,.{decimals}f}{currency}** 선 아래로 밀릴 경우, 즉각 매수를 중단하고 관망해야 합니다. 하방 변동성(ATR)을 감안한 1차 기계적 손절 방어선은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근으로 설정하는 것을 권장합니다.\n\n"
