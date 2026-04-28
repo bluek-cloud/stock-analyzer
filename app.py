@@ -12,10 +12,18 @@ st.set_page_config(page_title="StockMap", layout="wide")
 
 st.markdown("""
     <style>
-    /* 🌟 모바일 환경 '당겨서 새로고침(Pull-to-refresh)' 방지 코팅 */
-    html, body {
-        overscroll-behavior-y: none;
+    /* 🌟 모바일 당겨서 새로고침(Pull-to-refresh) 절대 방어 코팅 */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stMainBlockContainer"] {
+        overscroll-behavior-y: none !important;
+        overscroll-behavior-x: none !important;
     }
+    
+    /* Plotly 차트 터치 시 스크롤 이벤트 브라우저 전달 방어 */
+    .js-plotly-plot .plotly, .js-plotly-plot .main-svg {
+        touch-action: pan-x pan-y !important;
+        overscroll-behavior: none !important;
+    }
+
     .reportview-container .main .block-container { padding-top: 1rem; }
     [data-testid="stMetric"] { 
         background-color: rgba(128, 128, 128, 0.1); 
