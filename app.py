@@ -120,7 +120,7 @@ def calculate_quant_score(df, is_short_term):
     return min(score, 100)
 
 def detect_patterns_and_levels(df):
-    if len(df) < 60: return [], 0, 0
+    if len(df) < 3: return [], 0, 0  # 최소 3봉만 있으면 동작
     latest = df.iloc[-1]
     patterns = []
     body = abs(latest['Open'] - latest['Close'])
@@ -128,13 +128,13 @@ def detect_patterns_and_levels(df):
     upper_shadow = latest['High'] - max(latest['Open'], latest['Close'])
     
     if lower_shadow > body * 2 and upper_shadow < body: patterns.append("🔨 망치형 (바닥권 반등 신호)")
-    if latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
+    if len(df) >= 2 and latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
     
-    # 🌟 개선 4: 단순 min/max 대신 클러스터링 기반 지지/저항 탐지
-    # 여러 번 터치된 가격대를 군집화하여 신뢰도 높은 지지/저항선을 산출합니다.
-    past_df = df.iloc[-61:-1] if len(df) > 60 else df.iloc[:-1]
+    # 보유 데이터 전체를 활용 (60봉 미만도 처리)
+    lookback = min(61, len(df))
+    past_df = df.iloc[-lookback:-1] if lookback > 1 else df.iloc[:-1]
     if past_df.empty:
-        return patterns, latest['Close'], latest['Close']
+        return patterns, latest['Close'] * 0.95, latest['Close'] * 1.05
     
     # 로컬 저점(지지 후보)과 고점(저항 후보) 수집
     closes = past_df['Close']
@@ -458,7 +458,9 @@ if target_query:
                 st.markdown("### 🔍 **차트 패턴 및 지지/저항**")
                 p_text = ", ".join(pts) if pts else "특이 패턴 없음"
                 st.write(f"📍 **패턴:** {p_text}")
-                st.write(f"🛡️ **지지:** {sup:,.{decimals}f} {currency} | 🚧 **저항:** {res:,.{decimals}f} {currency}")
+                sup_text = f"{sup:,.{decimals}f} {currency}" if sup > 0 else "데이터 부족"
+                res_text = f"{res:,.{decimals}f} {currency}" if res > 0 else "데이터 부족"
+                st.write(f"🛡️ **지지:** {sup_text} | 🚧 **저항:** {res_text}")
 
         with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
             indicator_descriptions = {
