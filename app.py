@@ -65,50 +65,74 @@ def parse_query(query):
         return f"{query} ({code})", code, query, "원", 0
     return f"{query} (해외)", query, query, "$", 2
 
+import numpy as np
+
 def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
     df = df.copy()  
     close = df['Close'].squeeze()
     
+    # 1. 기본 이동평균선
     df['MA20'] = close.rolling(window=20).mean()
     df['MA60'] = close.rolling(window=60).mean()
     
+    # 2. RSI (표준 Wilder's 평활법 적용)
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    # 단순이동평균(SMA)이 아닌 RMA 적용 (1/14 alpha)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     
+    rs = avg_gain / (avg_loss + 1e-10)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    tr = pd.concat([df['High'] - df['Low'], (df['High'] - close.shift()).abs(), (df['Low'] - close.shift()).abs()], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(window=14).mean()
+    # 4. ATR (실질 변동폭)
+    tr = pd.concat([
+        df['High'] - df['Low'], 
+        (df['High'] - close.shift()).abs(), 
+        (df['Low'] - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    df['ATR'] = tr.ewm(alpha=1/14, adjust=False).mean() # RMA 적용
     
+    # 5. 볼린저 밴드
     df['STD'] = close.rolling(window=20).std()
     df['BB_Upper'] = df['MA20'] + (df['STD'] * 2)
     df['BB_Lower'] = df['MA20'] - (df['STD'] * 2)
-    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 
+    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / (df['MA20'] + 1e-10) * 100 
     
+    # 6. ADX 및 DMI (경고 방지용 np.where 사용 및 RMA 적용)
     high_diff = df['High'].diff()
     low_diff = -df['Low'].diff()
-    plus_dm = pd.Series(0.0, index=df.index)
-    minus_dm = pd.Series(0.0, index=df.index)
-    plus_dm[(high_diff > low_diff) & (high_diff > 0)] = high_diff[(high_diff > low_diff) & (high_diff > 0)]
-    minus_dm[(low_diff > high_diff) & (low_diff > 0)] = low_diff[(low_diff > high_diff) & (low_diff > 0)]
     
-    plus_di = 100 * (plus_dm.rolling(window=14).mean() / (df['ATR'] + 1e-10))
-    minus_di = 100 * (minus_dm.rolling(window=14).mean() / (df['ATR'] + 1e-10))
+    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
+    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+    
+    # Pandas Series로 변환 후 RMA 스무딩
+    plus_dm = pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean()
+    minus_dm = pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean()
+    
+    plus_di = 100 * (plus_dm / (df['ATR'] + 1e-10))
+    minus_di = 100 * (minus_dm / (df['ATR'] + 1e-10))
+    
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
-    df['ADX'] = dx.rolling(window=14).mean()
+    df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean() # RMA 적용
     df['+DI'] = plus_di
     df['-DI'] = minus_di
     
-    direction = (delta > 0).astype(int) - (delta < 0).astype(int)
+    # 7. OBV 및 거래량 비율 (0으로 나누기 방지)
+    direction = np.sign(delta).fillna(0) # -1, 0, 1 로 깔끔하게 처리
     df['OBV'] = (df['Volume'] * direction).cumsum()
+    
     df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
-    df['Vol_Ratio'] = (df['Volume'] / df['Vol_MA5']) * 100
+    # Vol_MA5가 0일 경우를 대비해 1e-10 추가
+    df['Vol_Ratio'] = (df['Volume'] / (df['Vol_MA5'] + 1e-10)) * 100
     
     return df
 
