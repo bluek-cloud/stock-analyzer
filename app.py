@@ -168,15 +168,27 @@ def detect_patterns_and_levels(df):
 
     if len(support_candidates) >= 2:
         sup_clusters = cluster_levels(support_candidates)
-        support = sup_clusters[0]['center']  # 가장 많이 터치된 지지 레벨
+        # 현재가 이하인 클러스터만 지지선으로 인정
+        valid_sup = [c for c in sup_clusters if c['center'] <= latest['Close']]
+        if valid_sup:
+            support = valid_sup[0]['center']  # 현재가 아래 중 가장 많이 터치된 레벨
+        else:
+            support = closes[closes <= latest['Close']].min() if not closes[closes <= latest['Close']].empty else closes.min()
     else:
-        support = closes.min()  # 후보가 부족하면 최솟값 fallback
+        below = closes[closes <= latest['Close']]
+        support = below.min() if not below.empty else closes.min()
 
     if len(resistance_candidates) >= 2:
         res_clusters = cluster_levels(resistance_candidates)
-        resistance = res_clusters[0]['center']  # 가장 많이 터치된 저항 레벨
+        # 현재가 이상인 클러스터만 저항선으로 인정
+        valid_res = [c for c in res_clusters if c['center'] >= latest['Close']]
+        if valid_res:
+            resistance = valid_res[0]['center']  # 현재가 위 중 가장 많이 터치된 레벨
+        else:
+            resistance = closes[closes >= latest['Close']].max() if not closes[closes >= latest['Close']].empty else closes.max()
     else:
-        resistance = closes.max()  # 후보가 부족하면 최댓값 fallback
+        above = closes[closes >= latest['Close']]
+        resistance = above.max() if not above.empty else closes.max()
 
     return patterns, support, resistance
 
