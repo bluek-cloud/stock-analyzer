@@ -256,6 +256,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     prev_candle_close = float(df['Close'].iloc[-2]) if len(df) > 1 else close
     prev_ma20 = float(df['MA20'].iloc[-2]) if len(df) > 1 and not pd.isna(df['MA20'].iloc[-2]) else ma20
+    prev_candle_obv = float(df['OBV'].iloc[-2]) if len(df) > 1 else obv
 
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
     prev_close, prev_obv, prev_rsi = close, obv, rsi  
@@ -356,7 +357,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             else: pos, strategy = "⚖️ 단기 관망", "단기적인 가격 조정이 진행 중입니다. 하락세가 진정되고 지지선에 도달하거나 턴어라운드 시그널이 나올 때까지 대기하세요."
         elif regime == "약세 추세":
             if (rsi <= 30 and near_sup) or bullish_div: pos, strategy = "🟠 데드캣 바운스 노림", "투매가 나온 과매도 상태이거나 다이버전스가 발생했습니다. 하락장이므로 '짧은 기술적 반등'만 노리고 빠르게 빠져나와야 합니다."
-            else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 섣부른 물타기를 절대 금지하고 현금을 관망하세요."
+            # 🌟 어색한 문장 교정 반영
+            else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 섣부른 물타기를 절대 금지하고 현금을 보유하며 관망하세요."
         elif regime == "변동성 폭발":
             if close > prev_candle_close or bullish_div: pos, strategy = "🔴 돌파 추세 추종", "대량 거래와 함께 상방으로 변동성이 터졌습니다. 새로운 대시세 랠리 시작 가능성이 높습니다."
             else: pos, strategy = "🔷 패닉셀 회피 (적극 매도)", "대량 거래를 동반한 하방 변동성 폭발입니다. 추가 급락을 막기 위해 즉각적인 리스크 관리가 필요합니다."
@@ -411,8 +413,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif regime == "약세 추세":
             if weekly_bullish:
                 ai_op += "• **장기 상승장 속 눌림목:** 일봉은 약세이나 주봉(장기)은 굳건한 상승장입니다. 장기 투자자에게는 매력적인 할인(눌림목) 구간이 될 수 있습니다.\n\n"
+            # 🌟 어색한 문장 교정 반영
             else:
-                ai_op += "• **완벽한 역배열:** 주봉과 일봉 모두 하락장입니다. 바닥을 섣불리 예측하지 말고 철저히 현금을 관망하세요.\n\n"
+                ai_op += "• **완벽한 역배열:** 주봉과 일봉 모두 하락장입니다. 바닥을 섣불리 예측하지 말고 철저히 현금을 보유하며 관망하세요.\n\n"
         elif regime == "횡보 박스":
             if weekly_bullish:
                 ai_op += "• **장기 상승장 속 기간 조정:** 주봉(장기) 추세는 살아있으나, 단기적으로 방향성을 탐색하며 쉬어가는 횡보 국면입니다.\n\n"
@@ -463,7 +466,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif rsi_pct >= 95: outlier_text += f"• **[탐욕 극단값]** 현재 RSI는 최근 1년 중 상위 {rsi_pct:.1f}%에 달하는 역사적 과매수 상태입니다. 단기 고점 징후이므로 급격한 차익 실현 물량에 대비하시길 바랍니다.\n\n"
     if bbw_pct <= 2: outlier_text += f"• **[변동성 최저치]** 현재 볼린저 밴드 폭이 최근 1년 중 가장 좁은 하위 {bbw_pct:.1f}% 수준으로 완벽하게 응축되었습니다. 거대한 시세 분출이 '임박'했습니다.\n\n"
 
-    # 🌟 핵심 수정: 수학적 오류를 제거하고 꼬리(Shadow) 및 거래량 비율 기반으로 완벽 재설계된 트랩 판독기
     fakeout_text = ""
     latest_open = float(latest['Open'])
     latest_high = float(latest['High'])
