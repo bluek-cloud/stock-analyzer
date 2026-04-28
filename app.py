@@ -325,12 +325,19 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"📊 **[수급 및 변동성]**\n\n"
     if obv > simple_prev_obv: ai_op += "• **세력수급:** 주가의 겉보기 흐름과 별개로 단기 누적 수급(OBV)이 우상향하고 있습니다. **'숨은 매집'** 트렌드로 판단되는 긍정적 시그널입니다.\n\n"
     else: ai_op += "• **세력수급:** 단기 누적 수급(OBV)이 하향 이탈하고 있습니다. 스마트 머니의 차익 실현 가능성이 있으니 방어적인 접근이 필요합니다.\n\n"
+    # MACD 상승 추세인데 OBV가 이탈 중이면 지표 충돌 경고 삽입
+    if macd > signal and obv < simple_prev_obv:
+        ai_op += "⚠️ **[지표 충돌 경고]** 추세(MACD)는 상승 방향이나 수급(OBV)은 이탈 중입니다. 추세가 수급 없이 지속되기 어려우므로 섣부른 매수보다 수급 회복 여부를 먼저 확인하세요.\n\n"
     if vol_ratio > 150: ai_op += f"• **거래량:** 최근 평균 대비 **{vol_ratio:.0f}%**의 대량 거래가 터지며 시장의 강한 주목을 받고 있습니다.\n\n"
 
     ai_op += f"🎯 **[타점 및 리스크 관리]**\n\n"
+    hold_positions = {"⚖️ 단기 관망", "⚖️ 장기 관망"}
     if near_sup: 
         if dist_to_sup >= 0:
-            ai_op += f"• **진입타점:** 현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접했습니다. **손익비가 뛰어난 매수 타점**입니다.\n\n"
+            if pos in hold_positions:
+                ai_op += f"• **지지선 근접:** 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 근접해 있으나, 지표 신뢰도(퀀트 스코어)가 충분하지 않아 추가 확인이 필요합니다. 지표가 개선될 때까지 관망을 유지하세요.\n\n"
+            else:
+                ai_op += f"• **진입타점:** 현재 주가가 강력한 핵심 지지선(**{sup:,.{decimals}f}{currency}**)에 매우 근접했습니다. **손익비가 뛰어난 매수 타점**입니다.\n\n"
         else:
             ai_op += f"• **주의구간:** 지지선을 살짝 하회했으나 5% 이내에서 공방 중입니다. 지지선 회복을 먼저 확인 후 진입하세요.\n\n"
     else:
