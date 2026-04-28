@@ -256,7 +256,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     prev_candle_close = float(df['Close'].iloc[-2]) if len(df) > 1 else close
     prev_ma20 = float(df['MA20'].iloc[-2]) if len(df) > 1 and not pd.isna(df['MA20'].iloc[-2]) else ma20
-    prev_candle_obv = float(df['OBV'].iloc[-2]) if len(df) > 1 else obv
 
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
     prev_close, prev_obv, prev_rsi = close, obv, rsi  
@@ -402,7 +401,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"🔍 **[시장 국면 분류]**\n\n"
     ai_op += f"• ADX 추세 강도({adx:.1f})와 이평선 배열을 종합 분석한 결과, 현재 이 종목은 **[{regime}]** 국면에 있습니다.\n\n"
     
-    # 🌟 핵심 수정: 누락된 국면에 대한 MTF 브리핑 추가
     if is_short_term and weekly_bullish is not None:
         ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
         if regime in ["강세 추세", "상승 조정"]: 
@@ -465,13 +463,21 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif rsi_pct >= 95: outlier_text += f"• **[탐욕 극단값]** 현재 RSI는 최근 1년 중 상위 {rsi_pct:.1f}%에 달하는 역사적 과매수 상태입니다. 단기 고점 징후이므로 급격한 차익 실현 물량에 대비하시길 바랍니다.\n\n"
     if bbw_pct <= 2: outlier_text += f"• **[변동성 최저치]** 현재 볼린저 밴드 폭이 최근 1년 중 가장 좁은 하위 {bbw_pct:.1f}% 수준으로 완벽하게 응축되었습니다. 거대한 시세 분출이 '임박'했습니다.\n\n"
 
+    # 🌟 핵심 수정: 수학적 오류를 제거하고 꼬리(Shadow) 및 거래량 비율 기반으로 완벽 재설계된 트랩 판독기
     fakeout_text = ""
+    latest_open = float(latest['Open'])
+    latest_high = float(latest['High'])
+    latest_low = float(latest['Low'])
+    body = abs(latest_open - close)
+    upper_shadow = latest_high - max(latest_open, close)
+    lower_shadow = min(latest_open, close) - latest_low
+
     if close > prev_candle_close and close > ma20 and prev_candle_close <= prev_ma20:
-        if obv < prev_candle_obv or vol_ratio < 100:
-            fakeout_text += "🚨 **[불 트랩(가짜 상승) 경계 발령]** 주가가 주요 저항인 20일선을 돌파했으나, 세력 수급(OBV)이 받쳐주지 않거나 거래량이 부진합니다. 추격 매수를 유도하기 위한 '가짜 돌파(Bull Trap)'일 확률이 높으니 속지 마십시오.\n\n"
+        if vol_ratio < 80 or upper_shadow > body * 1.5:
+            fakeout_text += "🚨 **[불 트랩(가짜 상승) 경계 발령]** 주가가 주요 저항인 20일선을 돌파했으나, 거래량이 부진하거나 위꼬리가 길게 물리며 매도세가 출회되고 있습니다. 추격 매수를 유도하기 위한 '가짜 돌파(Bull Trap)'일 확률이 높으니 속지 마십시오.\n\n"
     elif close < prev_candle_close and close < ma20 and prev_candle_close >= prev_ma20:
-        if obv > prev_candle_obv and vol_ratio < 100:
-            fakeout_text += "🚨 **[베어 트랩(가짜 하락) 경계 발령]** 주가가 20일선을 이탈하며 시장에 공포를 유발하고 있지만, 수급(OBV)은 오히려 들어오고 투매(거래량) 흔적도 없습니다. 개미 털기용 '가짜 하락(Bear Trap)'일 수 있으니 섣부른 손절을 보류하시길 권장합니다.\n\n"
+        if vol_ratio < 70 or lower_shadow > body * 1.5:
+            fakeout_text += "🚨 **[베어 트랩(가짜 하락) 경계 발령]** 주가가 20일선을 이탈하며 시장에 공포를 유발하고 있지만, 거래량이 평소보다 현저히 적거나 아래꼬리를 달며 누군가 물량을 받아낸 흔적이 있습니다. 개미 털기용 '가짜 하락(Bear Trap)'일 수 있으니 섣부른 투매를 보류하시길 권장합니다.\n\n"
 
     if outlier_text or fakeout_text:
         ai_op += f"🔬 **[심층 맥락 및 세력 트랩 판독기]**\n\n"
