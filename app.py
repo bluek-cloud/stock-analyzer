@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
+import numpy as np
 
 # ==========================================
 # 1. 페이지 설정 및 제목 (모바일 최적화)
@@ -70,45 +71,64 @@ def calculate_indicators(df):
     df = df.copy()  
     close = df['Close'].squeeze()
     
+    # 1. 기본 이동평균선
     df['MA20'] = close.rolling(window=20).mean()
     df['MA60'] = close.rolling(window=60).mean()
     
+    # 2. RSI (표준 Wilder's 평활법 적용)
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     
+    rs = avg_gain / (avg_loss + 1e-10)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    tr = pd.concat([df['High'] - df['Low'], (df['High'] - close.shift()).abs(), (df['Low'] - close.shift()).abs()], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(window=14).mean()
+    # 4. ATR (실질 변동폭)
+    tr = pd.concat([
+        df['High'] - df['Low'], 
+        (df['High'] - close.shift()).abs(), 
+        (df['Low'] - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    df['ATR'] = tr.ewm(alpha=1/14, adjust=False).mean() 
     
+    # 5. 볼린저 밴드
     df['STD'] = close.rolling(window=20).std()
     df['BB_Upper'] = df['MA20'] + (df['STD'] * 2)
     df['BB_Lower'] = df['MA20'] - (df['STD'] * 2)
-    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 
+    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / (df['MA20'] + 1e-10) * 100 
     
+    # 6. ADX 및 DMI 
     high_diff = df['High'].diff()
     low_diff = -df['Low'].diff()
-    plus_dm = pd.Series(0.0, index=df.index)
-    minus_dm = pd.Series(0.0, index=df.index)
-    plus_dm[(high_diff > low_diff) & (high_diff > 0)] = high_diff[(high_diff > low_diff) & (high_diff > 0)]
-    minus_dm[(low_diff > high_diff) & (low_diff > 0)] = low_diff[(low_diff > high_diff) & (low_diff > 0)]
     
-    plus_di = 100 * (plus_dm.rolling(window=14).mean() / (df['ATR'] + 1e-10))
-    minus_di = 100 * (minus_dm.rolling(window=14).mean() / (df['ATR'] + 1e-10))
+    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
+    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+    
+    plus_dm = pd.Series(plus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean()
+    minus_dm = pd.Series(minus_dm, index=df.index).ewm(alpha=1/14, adjust=False).mean()
+    
+    plus_di = 100 * (plus_dm / (df['ATR'] + 1e-10))
+    minus_di = 100 * (minus_dm / (df['ATR'] + 1e-10))
+    
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
-    df['ADX'] = dx.rolling(window=14).mean()
+    df['ADX'] = dx.ewm(alpha=1/14, adjust=False).mean() 
     df['+DI'] = plus_di
     df['-DI'] = minus_di
     
-    direction = (delta > 0).astype(int) - (delta < 0).astype(int)
+    # 7. OBV 및 거래량 비율
+    direction = np.sign(delta).fillna(0) 
     df['OBV'] = (df['Volume'] * direction).cumsum()
+    
     df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
-    df['Vol_Ratio'] = (df['Volume'] / df['Vol_MA5']) * 100
+    df['Vol_Ratio'] = (df['Volume'] / (df['Vol_MA5'] + 1e-10)) * 100
     
     return df
 
@@ -125,7 +145,8 @@ def calculate_quant_score(df, is_short_term):
             elif latest['RSI'] < 70: score += 5
         if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
             if latest['MACD'] > latest['Signal']: score += 25
-        if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: score += 30
+        obv_ref_short = df['OBV'].iloc[-min(5, len(df)-1)]
+        if not pd.isna(latest['OBV']) and latest['OBV'] > obv_ref_short: score += 30
         if not pd.isna(latest['Vol_Ratio']):
             if latest['Vol_Ratio'] >= 150 and latest['Close'] > prev['Close']: score += 20
     else:
@@ -134,7 +155,8 @@ def calculate_quant_score(df, is_short_term):
         if latest['Close'] >= highest_60 * 0.95: score += 20
         if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
             if latest['MACD'] > latest['Signal']: score += 20
-        if not pd.isna(latest['OBV']) and latest['OBV'] > df['OBV'].iloc[-5]: score += 20
+        obv_ref_long = df['OBV'].iloc[-min(13, len(df)-1)]
+        if not pd.isna(latest['OBV']) and latest['OBV'] > obv_ref_long: score += 20
         if not pd.isna(latest['RSI']):
             if 40 <= latest['RSI'] <= 70: score += 10
             
@@ -239,6 +261,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     obv_lookback    = simple_lookback if is_short_term else long_lookback
     simple_prev_obv = float(df['OBV'].iloc[-obv_lookback])
     
+    prev_candle_close = float(df['Close'].iloc[-2]) if len(df) > 1 else close
+
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
     prev_close, prev_obv, prev_rsi = close, obv, rsi  
     if swing_lookback > 5:
@@ -273,14 +297,18 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     prev_adx = float(df['ADX'].iloc[-2]) if len(df) > 1 and not pd.isna(df['ADX'].iloc[-2]) else 0
     
+    # 🌟 핵심 수정: '상승 조정' 국면 분기 추가로 억울한 약세장 오판 방지
     if is_squeeze:
         regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and adx > prev_adx and adx > 20:
         regime = "변동성 폭발"
     elif adx < 25:
         regime = "횡보 박스"
-    elif p_di > m_di and close >= ma20:
-        regime = "강세 추세"
+    elif ma20 >= ma60 and close >= ma60: # 60일선 위에 있는 정배열 베이스인 경우
+        if p_di > m_di and close >= ma20:
+            regime = "강세 추세"
+        else:
+            regime = "상승 조정" # 단기 이탈이나 모멘텀 둔화 시 '약세장' 대신 '조정'으로 판별
     else:
         regime = "약세 추세"
 
@@ -297,6 +325,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif regime == "강세 추세":
         comments['RSI'] = f"RSI({rsi:.1f}): 강세장에서는 지표가 쉽게 과열권에 진입합니다. " + ("강한 매수세로 단기 과열(70 이상) 상태이나 추세는 굳건합니다." if rsi >= 70 else "상승 추세 중 발생한 건전한 눌림목(조정) 타점입니다." if rsi <= 50 else "안정적인 상승 탄력을 유지하고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 상승 모멘텀이 강하게 유지되며 이평선 정배열 확장을 지지하고 있습니다."
+    elif regime == "상승 조정": # 상승 조정용 코멘트 추가
+        comments['RSI'] = f"RSI({rsi:.1f}): 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다."
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다."
     elif regime == "약세 추세":
         comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머뭅니다. " + ("일시적인 기술적 반등(데드캣 바운스) 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나, 하락장의 '떨어지는 칼날'일 수 있으니 섣부른 진입은 위험합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다."
@@ -323,34 +354,39 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             if rsi <= 55: pos, strategy = "🔴 추세 눌림목 적극 매수", "강한 상승 추세 속에서 건전한 조정(눌림목)이 발생한 훌륭한 진입 타점입니다."
             elif rsi >= 75: pos, strategy = "🔵 분할 익절", "강한 추세가 유지 중이나 단기 과열권입니다. 리스크 관리를 위해 수익을 분할 실현하세요."
             else: pos, strategy = "🟠 추세 홀딩", "안정적인 우상향 흐름이 진행 중입니다. 달리는 말에서 섣불리 내리지 마세요."
+        elif regime == "상승 조정": # 상승 조정용 전략 추가
+            if near_sup or rsi <= 45: pos, strategy = "🟠 추세 눌림목 적극 매수", "상승장 속에서 발생한 건전한 가격 조정입니다. 지지선 부근에서 분할 매수하기 매우 좋은 타점입니다."
+            else: pos, strategy = "⚖️ 단기 관망", "단기적인 가격 조정이 진행 중입니다. 하락세가 진정되고 지지선에 도달하거나 턴어라운드 시그널이 나올 때까지 대기하세요."
         elif regime == "약세 추세":
             if rsi <= 30 and near_sup: pos, strategy = "🟠 데드캣 바운스 노림", "투매가 나온 과매도 상태이나 하락장이므로, '짧은 기술적 반등(데드캣)'만 노리고 빠르게 빠져나와야 합니다."
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 섣부른 물타기를 절대 금지하고 현금을 관망하세요."
         elif regime == "변동성 폭발":
-            if close > prev_close: pos, strategy = "🔴 돌파 추세 추종", "대량 거래와 함께 상방으로 변동성이 터졌습니다. 새로운 대시세 랠리 시작 가능성이 높습니다."
+            if close > prev_candle_close: pos, strategy = "🔴 돌파 추세 추종", "대량 거래와 함께 상방으로 변동성이 터졌습니다. 새로운 대시세 랠리 시작 가능성이 높습니다."
             else: pos, strategy = "🔷 패닉셀 회피 (적극 매도)", "대량 거래를 동반한 하방 변동성 폭발입니다. 추가 급락을 막기 위해 즉각적인 리스크 관리가 필요합니다."
     else:
         if regime == "에너지 응축 (스퀴즈)":
             pos, strategy = "⚖️ 장기 관망", "장기적인 에너지가 응축되고 있습니다. 박스권 돌파 방향이 1~2년의 대시세를 결정할 것입니다."
         elif regime in ["강세 추세", "변동성 폭발"] and close > ma60:
             pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했으며 추세와 모멘텀이 모두 훌륭합니다."
+        elif regime == "상승 조정": # 장기 모드 상승 조정 전략
+            pos, strategy = "🔴 비중 확대 (장기)", "장기 상승 추세 속의 단기 조정(눌림목)입니다. 장기 투자자에게는 매력적인 비중 확대 기회입니다."
         elif regime == "약세 추세" and close < ma60:
             if rsi < 30: pos, strategy = "🟠 저점 분할 매집", "역사적 저평가 구간입니다. 장기적 안목에서 1차 분할 매집이 유효합니다."
             else: pos, strategy = "🔷 비중 축소 (장기)", "대세 하락장이 진행 중이므로 장기 현금 비중을 늘려야 합니다."
         else:
             pos, strategy = "⚖️ 장기 관망", "대세 추세가 전환되는 변곡점 또는 횡보 구간입니다. 뚜렷한 방향성을 대기하세요."
 
-    # 🌟 수정: 퀀트 스코어 방어 필터망의 텍스트를 위에서 배정한 텍스트와 100% 일치하도록 완벽 동기화
     q_score = calculate_quant_score(df, is_short_term)
     buy_positions  = {
-        "🟠 단기 박스권 하단 매수", "🔴 추세 눌림목 적극 매수", 
-        "🟠 데드캣 바운스 노림", "🔴 돌파 추세 추종", 
-        "🔴 비중 확대 (장기)", "🟠 저점 분할 매집"
+        "🔴 단기 적극 매수", "🟠 단기 분할 매수",
+        "🔴 추세 눌림목 적극 매수", "🟠 단기 박스권 하단 매수",
+        "🔴 비중 확대 (장기)", "🟠 저점 분할 매집",
+        "🔴 돌파 추세 추종", "🟠 데드캣 바운스 노림"
     }
     sell_positions = {
-        "🔵 단기 박스권 상단 매도", "🔵 분할 익절", 
-        "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)", 
-        "🔷 비중 축소 (장기)"
+        "🔷 단기 적극 매도", "🔵 단기 분할 매도",
+        "🔵 단기 박스권 상단 매도", "🔵 분할 익절",
+        "🔷 비중 축소 (장기)", "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)"
     }
     
     if pos in buy_positions and q_score < 30:
@@ -369,11 +405,11 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     if is_short_term and weekly_bullish is not None:
         ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
-        if regime == "강세 추세":
+        if regime in ["강세 추세", "상승 조정"]: # MTF에도 상승 조정 국면 포함
             if weekly_bullish:
-                ai_op += "• **완벽한 정배열:** 주봉(장기)과 일봉(단기)이 모두 완벽한 상승 추세입니다. 대세 상승장 속의 훌륭한 매수 타점입니다.\n\n"
+                ai_op += "• **장기 상승장 속 완벽한 눌림목:** 주봉(장기) 상승세가 굳건한 가운데 일봉(단기) 수준에서 지지력을 보이고 있습니다. A급 매수 기회입니다.\n\n"
             else:
-                ai_op += "• **단기 반등 주의:** 일봉은 강세이나, 주봉(장기)은 여전히 하락장(역배열)입니다. 장기 저항선에 부딪힐 수 있으니 목표 수익률을 짧게 잡으세요.\n\n"
+                ai_op += "• **단기 반등 주의:** 단기적으로 긍정적인 흐름이나, 주봉(장기)은 여전히 하락장(역배열)입니다. 장기 저항선에 부딪힐 수 있으니 목표 수익률을 짧게 잡으세요.\n\n"
         elif regime == "약세 추세":
             if weekly_bullish:
                 ai_op += "• **장기 상승장 속 눌림목:** 일봉은 약세이나 주봉(장기)은 굳건한 상승장입니다. 장기 투자자에게는 매력적인 할인(눌림목) 구간이 될 수 있습니다.\n\n"
@@ -389,6 +425,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif regime == "강세 추세":
         ai_op += "• 매수세가 시장을 장악한 강세장입니다. 보조지표가 다소 과열되더라도 추세가 꺾이지 않는 한 홀딩하는 것이 수익률을 극대화합니다.\n\n"
         if rsi < 55: ai_op += "• 특히 현재는 가파른 상승 중 일시적으로 쉬어가는 '눌림목' 패턴이 포착되어 매우 좋은 진입 기회입니다.\n\n"
+    elif regime == "상승 조정":
+        ai_op += "• 큰 흐름은 상승장이지만 단기적으로 매물 소화 및 가격 조정(눌림목)이 진행 중입니다. 섣부른 매도보다는 지지선에서의 재진입을 노리는 것이 유리합니다.\n\n"
+        if near_sup: ai_op += f"• 마침 주가가 주요 지지선({sup:,.{decimals}f}{currency})에 도달했습니다. 반등을 기대해볼 수 있는 확률 높은 타점입니다.\n\n"
     elif regime == "약세 추세":
         ai_op += "• 하락 압력이 지배적인 역배열 약세장입니다. 어설픈 지지선은 쉽게 붕괴되므로 보수적인 관망과 현금 관리가 생명입니다.\n\n"
         if rsi > 55: ai_op += "• 현재 나타나는 반등은 추세 전환이 아닌 일시적인 데드캣 바운스일 확률이 높으므로 탈출 기회로 삼으시길 권장합니다.\n\n"
@@ -398,7 +437,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"📊 **[수급 및 주요 레벨]**\n\n"
     if obv > simple_prev_obv: ai_op += "• **세력수급:** 겉보기 주가 흐름 이면에 누적 수급(OBV)이 꾸준히 유입되며 긍정적인 '매집' 정황이 관찰됩니다.\n\n"
     else: ai_op += "• **세력수급:** 누적 수급이 지속적으로 이탈 중이므로 어설픈 '가짜 반등'에 속지 않도록 유의해야 합니다.\n\n"
-    if regime == "강세 추세" and obv < simple_prev_obv:
+    if regime in ["강세 추세", "상승 조정"] and obv < simple_prev_obv:
         ai_op += "⚠️ **[지표 충돌 경고]** 추세는 상승 중이나 수급(OBV)이 은밀히 이탈 중입니다. 수급 없는 억지 상승일 수 있으므로 주의하세요.\n\n"
         
     ai_op += f"• **핵심레벨:** 1차 지지선은 **{sup:,.{decimals}f}{currency}**, 1차 저항선은 **{res:,.{decimals}f}{currency}**에 튼튼하게 형성되어 있습니다.\n\n"
@@ -525,69 +564,69 @@ if target_query:
                 st.divider()
                 st.info(comments.get('AI'))
 
-        # ==========================================
-        # 🌟 완전 고정형 및 능동 반응형 차트 (이동/확대 완전 차단 유지)
-        # ==========================================
-        tab1, tab2 = st.tabs(["📈 주가 & RSI 차트", "📊 수급 에너지(OBV)"])
-        
-        data_start_date = chart_df.index[0]
-        calculated_start_date = datetime.now() - timedelta(days=default_days)
-        final_start_date = max(data_start_date, calculated_start_date)
-        
-        plot_df = chart_df[chart_df.index >= final_start_date]
-        
-        if not plot_df.empty:
-            min_vals = plot_df[['Low', 'MA20', 'MA60']].min(skipna=True)
-            max_vals = plot_df[['High', 'MA20', 'MA60']].max(skipna=True)
-            c_min = min_vals.min()
-            c_max = max_vals.max()
-            if pd.isna(c_min) or pd.isna(c_max) or c_min == c_max:
-                c_min = plot_df['Low'].min()
-                c_max = plot_df['High'].max()
-            padding = (c_max - c_min) * 0.05
-            y_range = [c_min - padding, c_max + padding]
-        else:
-            y_range = None
+            # ==========================================
+            # 🌟 완전 고정형 및 능동 반응형 차트
+            # ==========================================
+            tab1, tab2 = st.tabs(["📈 주가 & RSI 차트", "📊 수급 에너지(OBV)"])
+            
+            data_start_date = chart_df.index[0]
+            calculated_start_date = datetime.now() - timedelta(days=default_days)
+            final_start_date = max(data_start_date, calculated_start_date)
+            
+            plot_df = chart_df[chart_df.index >= final_start_date]
+            
+            if not plot_df.empty:
+                min_vals = plot_df[['Low', 'MA20', 'MA60']].min(skipna=True)
+                max_vals = plot_df[['High', 'MA20', 'MA60']].max(skipna=True)
+                c_min = min_vals.min()
+                c_max = max_vals.max()
+                if pd.isna(c_min) or pd.isna(c_max) or c_min == c_max:
+                    c_min = plot_df['Low'].min()
+                    c_max = plot_df['High'].max()
+                padding = (c_max - c_min) * 0.05
+                y_range = [c_min - padding, c_max + padding]
+            else:
+                y_range = None
 
-        with tab1:
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
-            
-            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Upper'], name='BB 상단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Lower'], name='BB 하단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.1)'), row=1, col=1)
-            
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
-            
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
-            fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
+            with tab1:
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
+                
+                fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Upper'], name='BB 상단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Lower'], name='BB 하단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.1)'), row=1, col=1)
+                
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
+                
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+                fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
 
-            fig.update_layout(
-                height=550, 
-                margin=dict(t=10, b=10, l=0, r=0), 
-                dragmode=False, 
-                hovermode='x unified', showlegend=False
-            )
-            
-            fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
-            fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
-            fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1)
-            fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
-            
-            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
-            
-        with tab2:
-            if 'OBV' in plot_df.columns:
-                obv_fig = go.Figure(data=[go.Scatter(x=plot_df.index, y=plot_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
-                obv_fig.update_layout(
-                    height=350, margin=dict(t=10, b=10, l=0, r=0), 
+                fig.update_layout(
+                    height=550, 
+                    margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode=False, 
-                    hovermode='x unified'
+                    hovermode='x unified', showlegend=False
                 )
-                obv_fig.update_xaxes(range=[final_start_date, datetime.now()], fixedrange=True)
-                obv_fig.update_yaxes(fixedrange=True)
-                st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
+                
+                fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
+                fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
+                fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1)
+                fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
+                
+                st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
+                
+            with tab2:
+                if 'OBV' in plot_df.columns:
+                    obv_fig = go.Figure(data=[go.Scatter(x=plot_df.index, y=plot_df['OBV'], name='OBV', fill='tozeroy', line=dict(color='purple'))])
+                    obv_fig.update_layout(
+                        height=350, margin=dict(t=10, b=10, l=0, r=0), 
+                        dragmode=False, 
+                        hovermode='x unified'
+                    )
+                    obv_fig.update_xaxes(range=[final_start_date, datetime.now()], fixedrange=True)
+                    obv_fig.update_yaxes(fixedrange=True)
+                    st.plotly_chart(obv_fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 else:
     st.info("👈 사이드바에서 종목을 검색하여 분석을 시작하세요.")
