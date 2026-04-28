@@ -67,6 +67,7 @@ def parse_query(query):
 
 def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
+    df = df.copy()  # 원본 DataFrame 수정 방지
     close = df['Close'].squeeze()
     
     df['MA20'] = close.rolling(window=20).mean()
@@ -257,9 +258,15 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     rsi_status = "과매수" if rsi >= 70 else ("과매도" if rsi <= 30 else "안정")
     comments['RSI'] = f"현재 RSI 지수가 **{rsi:.1f}**를 기록하며 **{rsi_status}** 구간에 있습니다. "
-    if rsi >= 70: comments['RSI'] += "이는 단기 고점 신호를 보내는 것으로, 신규 진입보다는 수익 실현을 우선적으로 고려해야 합니다."
-    elif rsi <= 30: comments['RSI'] += "매도세가 쏠린 공포 구간입니다. 기술적 반등이 강하게 나타나는 타점이며, 진입 기회로 분석됩니다."
-    else: comments['RSI'] += "현재 매수와 매도 세력이 팽팽하게 맞서고 있습니다. 기존 추세나 박스권 흐름을 이어갈 가능성이 큽니다."
+    if rsi >= 70:
+        comments['RSI'] += "이는 단기 고점 신호를 보내는 것으로, 신규 진입보다는 수익 실현을 우선적으로 고려해야 합니다."
+    elif rsi <= 30:
+        if is_short_term:
+            comments['RSI'] += "매도세가 쏠린 공포 구간입니다. 기술적 반등이 강하게 나타나는 타점이며, 진입 기회로 분석됩니다."
+        else:
+            comments['RSI'] += "주봉 기준 극단적 과매도 구간입니다. 단기 반등 가능성은 있으나 대세 하락 중에는 반등 후 재하락이 이어질 수 있으므로, 추세 전환 확인 후 진입을 권장합니다."
+    else:
+        comments['RSI'] += "현재 매수와 매도 세력이 팽팽하게 맞서고 있습니다. 기존 추세나 박스권 흐름을 이어갈 가능성이 큽니다."
 
     macd_diff = macd - signal
     macd_status = "상승" if macd > signal else "하락"
@@ -446,38 +453,42 @@ if target_query:
         st.progress(q_score / 100)
 
         pts, sup, res = detect_patterns_and_levels(chart_df)
-        pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            with st.container(border=True):
-                st.markdown("### 🎯 **종합 전략**")
-                st.warning(f"**포지션: {pos}**\n\n**의견:** {strat}")
-        with col2:
-            with st.container(border=True):
-                st.markdown("### 🔍 **차트 패턴 및 지지/저항**")
-                p_text = ", ".join(pts) if pts else "특이 패턴 없음"
-                st.write(f"📍 **패턴:** {p_text}")
-                sup_text = f"{sup:,.{decimals}f} {currency}" if sup > 0 else "데이터 부족"
-                res_text = f"{res:,.{decimals}f} {currency}" if res > 0 else "데이터 부족"
-                st.write(f"🛡️ **지지:** {sup_text} | 🚧 **저항:** {res_text}")
 
-        with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
-            indicator_descriptions = {
-                "상대 거래량": "**상대 거래량 (Relative Volume)**\n\n최근 5일(주) 평균 거래량 대비 현재 거래량의 비율입니다. 150% 이상일 경우 평소보다 많은 자금이 유입되며 의미 있는 변동성이 발생하고 있음을 뜻합니다.",
-                "OBV 누적": "**OBV (On Balance Volume)**\n\n주가가 상승한 날의 거래량은 더하고 하락한 날의 거래량은 빼서 누적한 수급 지표입니다. 주가가 횡보/하락함에도 OBV가 상승하면 세력의 '매집'으로, 반대의 경우 '분산(이탈)'으로 해석합니다.",
-                "RSI 강도": "**RSI (상대강도지수)**\n\n주가의 상승폭과 하락폭을 바탕으로 과열 상태를 수치화한 모멘텀 지표입니다.\n• **70 이상**: 과매수 (단기 고점 징후, 수익실현 고려)\n• **30 이하**: 과매도 (단기 바닥 징후, 반등/진입 고려)",
-                "MACD 흐름": "**MACD (이동평균수렴확산지수)**\n\n단기 이동평균선과 장기 이동평균선의 차이를 이용해 추세의 방향과 힘을 파악합니다. MACD 선이 시그널 선을 상향 돌파(골든크로스)하면 매수, 하향 돌파(데드크로스)하면 매도 신호로 해석합니다.",
-                "ATR 변동성": "**ATR (평균진정범위)**\n\n고점과 저점, 전일 종가를 모두 고려한 '실질적인 주가 변동폭'의 평균입니다. 이 수치가 높을수록 위아래 흔들림이 크다는 의미이며, 자신의 투자 성향에 맞는 손절가(Stop Loss)를 설정할 때 유용하게 쓰입니다."
-            }
-            
-            for label, key in [("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
-                c1, c2 = st.columns([0.25, 0.75])
-                with c1.popover(label, use_container_width=True): 
-                    st.info(indicator_descriptions.get(label, f"**{label}**"))
-                c2.markdown(comments.get(key, '데이터 없음'))
-            st.divider()
-            st.info(comments.get('AI'))
+        if len(chart_df) < 2:
+            st.warning("데이터가 부족하여 상세 분석을 수행할 수 없습니다.")
+        else:
+            pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit)
+        
+            col1, col2 = st.columns(2)
+            with col1:
+                with st.container(border=True):
+                    st.markdown("### 🎯 **종합 전략**")
+                    st.warning(f"**포지션: {pos}**\n\n**의견:** {strat}")
+            with col2:
+                with st.container(border=True):
+                    st.markdown("### 🔍 **차트 패턴 및 지지/저항**")
+                    p_text = ", ".join(pts) if pts else "특이 패턴 없음"
+                    st.write(f"📍 **패턴:** {p_text}")
+                    sup_text = f"{sup:,.{decimals}f} {currency}" if sup > 0 else "데이터 부족"
+                    res_text = f"{res:,.{decimals}f} {currency}" if res > 0 else "데이터 부족"
+                    st.write(f"🛡️ **지지:** {sup_text} | 🚧 **저항:** {res_text}")
+
+            with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
+                indicator_descriptions = {
+                    "상대 거래량": "**상대 거래량 (Relative Volume)**\n\n최근 5일(주) 평균 거래량 대비 현재 거래량의 비율입니다. 150% 이상일 경우 평소보다 많은 자금이 유입되며 의미 있는 변동성이 발생하고 있음을 뜻합니다.",
+                    "OBV 누적": "**OBV (On Balance Volume)**\n\n주가가 상승한 날의 거래량은 더하고 하락한 날의 거래량은 빼서 누적한 수급 지표입니다. 주가가 횡보/하락함에도 OBV가 상승하면 세력의 '매집'으로, 반대의 경우 '분산(이탈)'으로 해석합니다.",
+                    "RSI 강도": "**RSI (상대강도지수)**\n\n주가의 상승폭과 하락폭을 바탕으로 과열 상태를 수치화한 모멘텀 지표입니다.\n• **70 이상**: 과매수 (단기 고점 징후, 수익실현 고려)\n• **30 이하**: 과매도 (단기 바닥 징후, 반등/진입 고려)",
+                    "MACD 흐름": "**MACD (이동평균수렴확산지수)**\n\n단기 이동평균선과 장기 이동평균선의 차이를 이용해 추세의 방향과 힘을 파악합니다. MACD 선이 시그널 선을 상향 돌파(골든크로스)하면 매수, 하향 돌파(데드크로스)하면 매도 신호로 해석합니다.",
+                    "ATR 변동성": "**ATR (평균진정범위)**\n\n고점과 저점, 전일 종가를 모두 고려한 '실질적인 주가 변동폭'의 평균입니다. 이 수치가 높을수록 위아래 흔들림이 크다는 의미이며, 자신의 투자 성향에 맞는 손절가(Stop Loss)를 설정할 때 유용하게 쓰입니다."
+                }
+                
+                for label, key in [("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
+                    c1, c2 = st.columns([0.25, 0.75])
+                    with c1.popover(label, use_container_width=True): 
+                        st.info(indicator_descriptions.get(label, f"**{label}**"))
+                    c2.markdown(comments.get(key, '데이터 없음'))
+                st.divider()
+                st.info(comments.get('AI'))
 
         # ==========================================
         # 🌟 완전 고정형 및 능동 반응형 차트 (이동/확대 완전 차단 유지)
@@ -491,10 +502,13 @@ if target_query:
         plot_df = chart_df[chart_df.index >= final_start_date]
         
         if not plot_df.empty:
-            min_vals = plot_df[['Low', 'MA20', 'MA60']].min()
-            max_vals = plot_df[['High', 'MA20', 'MA60']].max()
+            min_vals = plot_df[['Low', 'MA20', 'MA60']].min(skipna=True)
+            max_vals = plot_df[['High', 'MA20', 'MA60']].max(skipna=True)
             c_min = min_vals.min()
             c_max = max_vals.max()
+            if pd.isna(c_min) or pd.isna(c_max) or c_min == c_max:
+                c_min = plot_df['Low'].min()
+                c_max = plot_df['High'].max()
             padding = (c_max - c_min) * 0.05
             y_range = [c_min - padding, c_max + padding]
         else:
