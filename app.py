@@ -1,4 +1,4 @@
-\import streamlit as st
+import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -86,11 +86,10 @@ def calculate_indicators(df):
     tr = pd.concat([df['High'] - df['Low'], (df['High'] - close.shift()).abs(), (df['Low'] - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
-    # 🌟 고도화 2: 볼린저 밴드(Squeeze) 지표 추가
     df['STD'] = close.rolling(window=20).std()
     df['BB_Upper'] = df['MA20'] + (df['STD'] * 2)
     df['BB_Lower'] = df['MA20'] - (df['STD'] * 2)
-    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 # Band Width
+    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 
     
     high_diff = df['High'].diff()
     low_diff = -df['Low'].diff()
@@ -216,7 +215,6 @@ def get_stock_data(code):
         return df
     except: return pd.DataFrame()
 
-# 🌟 고도화 1: 주봉(Weekly) 판단 결과를 받는 파라미터(weekly_bullish) 추가
 def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, weekly_bullish=None):
     latest = df.iloc[-1]
     close = float(latest['Close'])
@@ -268,15 +266,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             prev_obv   = float(df.loc[min_idx, 'OBV'])
             prev_rsi   = float(df.loc[min_idx, 'RSI']) if not pd.isna(df.loc[min_idx, 'RSI']) else 50
 
-    # 🌟 고도화 2: 스퀴즈 국면 판별 (최근 6개월 최저 BBW 근접 여부)
     squeeze_lookback = 120 if is_short_term else 24
     past_bbw = df['BBW'].iloc[-squeeze_lookback:-1] if len(df) > squeeze_lookback else df['BBW'].iloc[:-1]
     current_bbw = float(latest['BBW']) if not pd.isna(latest['BBW']) else 100
-    is_squeeze = not past_bbw.empty and (current_bbw <= past_bbw.min() * 1.05) # 6개월 최저치의 5% 이내로 초압축 상태
+    is_squeeze = not past_bbw.empty and (current_bbw <= past_bbw.min() * 1.05) 
 
     prev_adx = float(df['ADX'].iloc[-2]) if len(df) > 1 and not pd.isna(df['ADX'].iloc[-2]) else 0
     
-    # 국면 엔진 (스퀴즈 추가)
     if is_squeeze:
         regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and adx > prev_adx and adx > 20:
@@ -362,7 +358,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"🔍 **[시장 국면 분류]**\n\n"
     ai_op += f"• ADX 추세 강도({adx:.1f})와 이평선 배열을 종합 분석한 결과, 현재 이 종목은 **[{regime}]** 국면에 있습니다.\n\n"
     
-    # 🌟 고도화 1: MTF (다중 시간대 분석) 결과 출력
     if is_short_term and weekly_bullish is not None:
         ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
         if regime == "강세 추세":
@@ -456,7 +451,6 @@ if target_query:
         is_short_term = "단기" in analyze_mode
         time_unit = "일" if is_short_term else "주"
         
-        # 🌟 고도화 1: 벡그라운드에서 주봉(Weekly) 데이터 사전 계산
         chart_df_daily = calculate_indicators(raw_df.copy())
         
         weekly_raw = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
@@ -465,15 +459,14 @@ if target_query:
         weekly_bullish = None
         if not chart_df_weekly.empty:
             w_latest = chart_df_weekly.iloc[-1]
-            # 주봉상 정배열 및 모멘텀 상승 여부
             weekly_bullish = (w_latest['Close'] > w_latest['MA60']) and (w_latest['MACD'] > w_latest['Signal'])
 
         if not is_short_term:
             chart_df = chart_df_weekly
-            default_days = 730 # 장기: 2년
+            default_days = 730 
         else:
             chart_df = chart_df_daily
-            default_days = 180 # 단기: 6개월
+            default_days = 180 
 
         cur_price = raw_df['Close'].iloc[-1]
         diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
@@ -489,7 +482,6 @@ if target_query:
         if len(chart_df) < 2:
             st.warning("데이터가 부족하여 상세 분석을 수행할 수 없습니다.")
         else:
-            # 주봉 데이터(weekly_bullish)를 함께 넘겨 MTF 분석 수행
             pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, weekly_bullish)
         
             col1, col2 = st.columns(2)
@@ -551,7 +543,6 @@ if target_query:
         with tab1:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
             
-            # 🌟 고도화 2: 볼린저 밴드 시각화 추가 (스퀴즈 상태 시각적 확인용)
             fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Upper'], name='BB 상단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot')), row=1, col=1)
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Lower'], name='BB 하단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.1)'), row=1, col=1)
