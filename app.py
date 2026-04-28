@@ -12,18 +12,6 @@ st.set_page_config(page_title="StockMap", layout="wide")
 
 st.markdown("""
     <style>
-    /* 🌟 모바일 당겨서 새로고침(Pull-to-refresh) 절대 방어 코팅 */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stMainBlockContainer"] {
-        overscroll-behavior-y: none !important;
-        overscroll-behavior-x: none !important;
-    }
-    
-    /* Plotly 차트 터치 시 스크롤 이벤트 브라우저 전달 방어 */
-    .js-plotly-plot .plotly, .js-plotly-plot .main-svg {
-        touch-action: pan-x pan-y !important;
-        overscroll-behavior: none !important;
-    }
-
     .reportview-container .main .block-container { padding-top: 1rem; }
     [data-testid="stMetric"] { 
         background-color: rgba(128, 128, 128, 0.1); 
@@ -352,9 +340,18 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         else:
             pos, strategy = "⚖️ 장기 관망", "대세 추세가 전환되는 변곡점 또는 횡보 구간입니다. 뚜렷한 방향성을 대기하세요."
 
+    # 🌟 수정: 퀀트 스코어 방어 필터망의 텍스트를 위에서 배정한 텍스트와 100% 일치하도록 완벽 동기화
     q_score = calculate_quant_score(df, is_short_term)
-    buy_positions  = {"🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 추세 눌림목 적극 매수", "🟠 단기 박스권 하단 매수", "🔴 비중 확대 (장기)", "🟠 저점 분할 매집", "🔴 돌파 추세 추종"}
-    sell_positions = {"🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔵 단기 박스권 상단 매도", "🔷 비중 축소 (장기)", "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)"}
+    buy_positions  = {
+        "🟠 단기 박스권 하단 매수", "🔴 추세 눌림목 적극 매수", 
+        "🟠 데드캣 바운스 노림", "🔴 돌파 추세 추종", 
+        "🔴 비중 확대 (장기)", "🟠 저점 분할 매집"
+    }
+    sell_positions = {
+        "🔵 단기 박스권 상단 매도", "🔵 분할 익절", 
+        "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)", 
+        "🔷 비중 축소 (장기)"
+    }
     
     if pos in buy_positions and q_score < 30:
         pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
