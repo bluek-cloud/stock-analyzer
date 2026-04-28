@@ -86,7 +86,7 @@ def calculate_indicators(df):
     tr = pd.concat([df['High'] - df['Low'], (df['High'] - close.shift()).abs(), (df['Low'] - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
-    # 🌟 핵심 수정 1: ADX (평균방향성지수) 계산 로직 추가
+    # 🌟 ADX (평균방향성지수) 계산 로직
     high_diff = df['High'].diff()
     low_diff = -df['Low'].diff()
     plus_dm = pd.Series(0.0, index=df.index)
@@ -137,7 +137,7 @@ def calculate_quant_score(df, is_short_term):
     return min(score, 100)
 
 def detect_patterns_and_levels(df):
-    if len(df) < 3: return [], 0, 0  # 최소 3봉만 있으면 동작
+    if len(df) < 3: return [], 0, 0  
     latest = df.iloc[-1]
     patterns = []
     body = abs(latest['Open'] - latest['Close'])
@@ -221,7 +221,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     atr = float(latest['ATR']) if not pd.isna(latest['ATR']) else 0
     obv = float(latest['OBV']) if not pd.isna(latest['OBV']) else 0
     
-    # ADX Data
+    # 🌟 NameError 수정: vol_pct 계산식 복구
+    vol_pct = (atr / close) * 100 if close > 0 else 0
+    
     adx = float(latest['ADX']) if not pd.isna(latest['ADX']) else 0
     p_di = float(latest['+DI']) if not pd.isna(latest['+DI']) else 0
     m_di = float(latest['-DI']) if not pd.isna(latest['-DI']) else 0
@@ -261,7 +263,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             prev_obv   = float(df.loc[min_idx, 'OBV'])
             prev_rsi   = float(df.loc[min_idx, 'RSI']) if not pd.isna(df.loc[min_idx, 'RSI']) else 50
 
-    # 🌟 핵심 수정 2: 4대 시장 국면 분류 엔진 
+    # 🌟 4대 시장 국면 분류 엔진 
     prev_adx = float(df['ADX'].iloc[-2]) if len(df) > 1 and not pd.isna(df['ADX'].iloc[-2]) else 0
     
     if vol_ratio >= 150 and adx > prev_adx and adx > 20:
@@ -275,7 +277,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     comments = {}
     
-    # 🌟 핵심 수정 3: 국면 종속적(Context-aware) 지표 서술
     comments['ADX'] = f"현재 ADX 추세강도 지수는 **{adx:.1f}**이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
     
     if regime == "횡보 박스":
@@ -299,7 +300,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     near_sup = abs(dist_to_sup) <= 5 
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 핵심 수정 4: 국면 기반 통합 투자 전략 산출 (모순 차단)
+    # 🌟 국면 기반 통합 투자 전략 산출
     if is_short_term:
         if regime == "횡보 박스":
             if near_sup or rsi <= 40: pos, strategy = "🟠 단기 박스권 하단 매수", "박스권 하단 지지선을 확인했습니다. 상단 저항선까지의 핑퐁 반등 매매가 유효합니다."
@@ -324,7 +325,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         else:
             pos, strategy = "⚖️ 장기 관망", "대세 추세가 전환되는 변곡점 또는 횡보 구간입니다. 뚜렷한 방향성을 대기하세요."
 
-    # 퀀트 스코어를 통한 포지션 신뢰도 필터 (그대로 유지)
     q_score = calculate_quant_score(df, is_short_term)
     buy_positions  = {"🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 추세 눌림목 적극 매수", "🟠 단기 박스권 하단 매수", "🔴 비중 확대 (장기)", "🟠 저점 분할 매집", "🔴 돌파 추세 추종"}
     sell_positions = {"🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔵 단기 박스권 상단 매도", "🔷 비중 축소 (장기)", "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)"}
@@ -336,7 +336,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
         strategy = f"매도 신호가 감지되었으나 전체 퀀트 스코어({q_score}점)가 높아 신호가 상충합니다. 방향성 확인 후 대응하세요."
 
-    # 🌟 핵심 수정 5: 국면 맞춤형 통합 AI 리포트 생성
+    # 🌟 국면 맞춤형 통합 AI 리포트 생성
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
@@ -460,7 +460,6 @@ if target_query:
                     res_text = f"{res:,.{decimals}f} {currency}" if res > 0 else "데이터 부족"
                     st.write(f"🛡️ **지지:** {sup_text} | 🚧 **저항:** {res_text}")
 
-            # 🌟 핵심 수정 6: ADX 지표 설명을 팝오버 UI에 매끄럽게 추가
             with st.expander("🔬 지표별 상세 수치 분석 (용어 클릭)", expanded=True):
                 indicator_descriptions = {
                     "ADX 추세강도": "**ADX (평균방향성지수)**\n\n주가의 상승/하락 방향과 무관하게, 현재 진행 중인 추세의 '파워(속도)' 자체를 측정합니다. 25 이상이면 강한 추세가 진행 중임을 뜻하며, 25 미만이면 에너지가 빠진 횡보(박스권) 장세를 의미합니다.",
