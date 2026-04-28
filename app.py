@@ -86,6 +86,12 @@ def calculate_indicators(df):
     tr = pd.concat([df['High'] - df['Low'], (df['High'] - close.shift()).abs(), (df['Low'] - close.shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
+    # 🌟 고도화 2: 볼린저 밴드(Squeeze) 지표 추가
+    df['STD'] = close.rolling(window=20).std()
+    df['BB_Upper'] = df['MA20'] + (df['STD'] * 2)
+    df['BB_Lower'] = df['MA20'] - (df['STD'] * 2)
+    df['BBW'] = (df['BB_Upper'] - df['BB_Lower']) / df['MA20'] * 100 # Band Width
+    
     high_diff = df['High'].diff()
     low_diff = -df['Low'].diff()
     plus_dm = pd.Series(0.0, index=df.index)
@@ -210,7 +216,8 @@ def get_stock_data(code):
         return df
     except: return pd.DataFrame()
 
-def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit):
+# 🌟 고도화 1: 주봉(Weekly) 판단 결과를 받는 파라미터(weekly_bullish) 추가
+def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, weekly_bullish=None):
     latest = df.iloc[-1]
     close = float(latest['Close'])
     rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else 50
@@ -261,9 +268,18 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             prev_obv   = float(df.loc[min_idx, 'OBV'])
             prev_rsi   = float(df.loc[min_idx, 'RSI']) if not pd.isna(df.loc[min_idx, 'RSI']) else 50
 
+    # 🌟 고도화 2: 스퀴즈 국면 판별 (최근 6개월 최저 BBW 근접 여부)
+    squeeze_lookback = 120 if is_short_term else 24
+    past_bbw = df['BBW'].iloc[-squeeze_lookback:-1] if len(df) > squeeze_lookback else df['BBW'].iloc[:-1]
+    current_bbw = float(latest['BBW']) if not pd.isna(latest['BBW']) else 100
+    is_squeeze = not past_bbw.empty and (current_bbw <= past_bbw.min() * 1.05) # 6개월 최저치의 5% 이내로 초압축 상태
+
     prev_adx = float(df['ADX'].iloc[-2]) if len(df) > 1 and not pd.isna(df['ADX'].iloc[-2]) else 0
     
-    if vol_ratio >= 150 and adx > prev_adx and adx > 20:
+    # 국면 엔진 (스퀴즈 추가)
+    if is_squeeze:
+        regime = "에너지 응축 (스퀴즈)"
+    elif vol_ratio >= 150 and adx > prev_adx and adx > 20:
         regime = "변동성 폭발"
     elif adx < 25:
         regime = "횡보 박스"
@@ -276,7 +292,10 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     comments['ADX'] = f"현재 ADX 추세강도 지수는 **{adx:.1f}**이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
     
-    if regime == "횡보 박스":
+    if regime == "에너지 응축 (스퀴즈)":
+        comments['RSI'] = f"RSI({rsi:.1f}): 볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다."
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다. 폭풍 전야의 고요한 상태입니다."
+    elif regime == "횡보 박스":
         comments['RSI'] = f"RSI({rsi:.1f}): 횡보장에서는 RSI의 신뢰도가 가장 높습니다. " + ("박스권 하단 지지선(과매도) 터치로 기술적 반등이 예상됩니다." if rsi <= 40 else "박스권 상단 저항선(과매수) 도달로 조정이 예상됩니다." if rsi >= 60 else "박스권 중간에서 뚜렷한 방향성을 탐색 중입니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 뚜렷한 추세가 부재한 박스권이므로 MACD 크로스 신호의 신뢰도는 다소 떨어집니다."
     elif regime == "강세 추세":
@@ -298,7 +317,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
     if is_short_term:
-        if regime == "횡보 박스":
+        if regime == "에너지 응축 (스퀴즈)":
+            pos, strategy = "⚖️ 방향성 대기 (관망)", "볼린저 밴드가 극도로 수축되었습니다. 상방 돌파 시 추격 매수, 하방 이탈 시 즉각 손절(관망) 준비를 하세요."
+        elif regime == "횡보 박스":
             if near_sup or rsi <= 40: pos, strategy = "🟠 단기 박스권 하단 매수", "박스권 하단 지지선을 확인했습니다. 상단 저항선까지의 핑퐁 반등 매매가 유효합니다."
             elif (res - close) / close * 100 <= 5 or rsi >= 65: pos, strategy = "🔵 단기 박스권 상단 매도", "박스권 상단 저항에 도달했습니다. 뚫지 못할 확률이 높으므로 비중 축소를 권장합니다."
             else: pos, strategy = "⚖️ 단기 관망", "박스권 중간 지대입니다. 어설픈 진입보다는 지지선/저항선 도달을 기다리세요."
@@ -313,7 +334,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             if close > prev_close: pos, strategy = "🔴 돌파 추세 추종", "대량 거래와 함께 상방으로 변동성이 터졌습니다. 새로운 대시세 랠리 시작 가능성이 높습니다."
             else: pos, strategy = "🔷 패닉셀 회피 (적극 매도)", "대량 거래를 동반한 하방 변동성 폭발입니다. 추가 급락을 막기 위해 즉각적인 리스크 관리가 필요합니다."
     else:
-        if regime in ["강세 추세", "변동성 폭발"] and close > ma60:
+        if regime == "에너지 응축 (스퀴즈)":
+            pos, strategy = "⚖️ 장기 관망", "장기적인 에너지가 응축되고 있습니다. 박스권 돌파 방향이 1~2년의 대시세를 결정할 것입니다."
+        elif regime in ["강세 추세", "변동성 폭발"] and close > ma60:
             pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했으며 추세와 모멘텀이 모두 훌륭합니다."
         elif regime == "약세 추세" and close < ma60:
             if rsi < 30: pos, strategy = "🟠 저점 분할 매집", "역사적 저평가 구간입니다. 장기적 안목에서 1차 분할 매집이 유효합니다."
@@ -332,7 +355,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
         strategy = f"매도 신호가 감지되었으나 전체 퀀트 스코어({q_score}점)가 높아 신호가 상충합니다. 방향성 확인 후 대응하세요."
 
-    # 🌟 스퀴즈 현상 방지를 위해 모든 줄바꿈을 \n\n으로 완벽하게 적용
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
@@ -340,8 +362,24 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     ai_op += f"🔍 **[시장 국면 분류]**\n\n"
     ai_op += f"• ADX 추세 강도({adx:.1f})와 이평선 배열을 종합 분석한 결과, 현재 이 종목은 **[{regime}]** 국면에 있습니다.\n\n"
     
+    # 🌟 고도화 1: MTF (다중 시간대 분석) 결과 출력
+    if is_short_term and weekly_bullish is not None:
+        ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
+        if regime == "강세 추세":
+            if weekly_bullish:
+                ai_op += "• **완벽한 정배열:** 주봉(장기)과 일봉(단기)이 모두 완벽한 상승 추세입니다. 대세 상승장 속의 훌륭한 매수 타점입니다.\n\n"
+            else:
+                ai_op += "• **단기 반등 주의:** 일봉은 강세이나, 주봉(장기)은 여전히 하락장(역배열)입니다. 장기 저항선에 부딪힐 수 있으니 목표 수익률을 짧게 잡으세요.\n\n"
+        elif regime == "약세 추세":
+            if weekly_bullish:
+                ai_op += "• **장기 상승장 속 눌림목:** 일봉은 약세이나 주봉(장기)은 굳건한 상승장입니다. 장기 투자자에게는 매력적인 할인(눌림목) 구간이 될 수 있습니다.\n\n"
+            else:
+                ai_op += "• **완벽한 역배열:** 주봉과 일봉 모두 하락장입니다. 바닥을 섣불리 예측하지 말고 철저히 현금을 관망하세요.\n\n"
+    
     ai_op += f"💡 **[국면 맞춤형 통합 해석]**\n\n"
-    if regime == "횡보 박스":
+    if regime == "에너지 응축 (스퀴즈)":
+        ai_op += "• 현재 볼린저 밴드의 폭이 최근 6개월 내 최저 수준으로 극도로 압축된 **[변동성 응축(Squeeze)]** 상태입니다. 조만간 위든 아래든 거대한 폭발이 임박했으니, 돌파 방향을 예의주시하세요.\n\n"
+    elif regime == "횡보 박스":
         ai_op += "• 뚜렷한 방향성이 없이 에너지를 응축하는 횡보장입니다. 지표의 '과열/침체' 신호를 역발상으로 활용하는 박스권 매매가 유리합니다.\n\n"
         if near_sup: ai_op += f"• 현재 박스권 하단 지지선({sup:,.{decimals}f}{currency})에 근접하여 반등 매수 매력도가 매우 높습니다.\n\n"
     elif regime == "강세 추세":
@@ -418,12 +456,23 @@ if target_query:
         is_short_term = "단기" in analyze_mode
         time_unit = "일" if is_short_term else "주"
         
+        # 🌟 고도화 1: 벡그라운드에서 주봉(Weekly) 데이터 사전 계산
+        chart_df_daily = calculate_indicators(raw_df.copy())
+        
+        weekly_raw = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+        chart_df_weekly = calculate_indicators(weekly_raw)
+        
+        weekly_bullish = None
+        if not chart_df_weekly.empty:
+            w_latest = chart_df_weekly.iloc[-1]
+            # 주봉상 정배열 및 모멘텀 상승 여부
+            weekly_bullish = (w_latest['Close'] > w_latest['MA60']) and (w_latest['MACD'] > w_latest['Signal'])
+
         if not is_short_term:
-            chart_df = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-            chart_df = calculate_indicators(chart_df)
+            chart_df = chart_df_weekly
             default_days = 730 # 장기: 2년
         else:
-            chart_df = calculate_indicators(raw_df.copy())
+            chart_df = chart_df_daily
             default_days = 180 # 단기: 6개월
 
         cur_price = raw_df['Close'].iloc[-1]
@@ -440,7 +489,8 @@ if target_query:
         if len(chart_df) < 2:
             st.warning("데이터가 부족하여 상세 분석을 수행할 수 없습니다.")
         else:
-            pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit)
+            # 주봉 데이터(weekly_bullish)를 함께 넘겨 MTF 분석 수행
+            pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, weekly_bullish)
         
             col1, col2 = st.columns(2)
             with col1:
@@ -501,7 +551,11 @@ if target_query:
         with tab1:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.03)
             
+            # 🌟 고도화 2: 볼린저 밴드 시각화 추가 (스퀴즈 상태 시각적 확인용)
             fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Upper'], name='BB 상단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['BB_Lower'], name='BB 하단', line=dict(color='rgba(173, 216, 230, 0.4)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.1)'), row=1, col=1)
+            
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
             
