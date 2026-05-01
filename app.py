@@ -483,9 +483,12 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += f"🔬 **[심층 분석 및 시장 특이점 판독]**\n\n"
         ai_op += outlier_text + fakeout_text
 
+    
     playbook_text = f"📅 **[단기 실전 대응 시나리오 가이드]**\n\n"
     playbook_text += f"• **상방 돌파 시나리오:** 주가가 1차 저항선인 **{res:,.{decimals}f}{currency}**을 강하게 돌파하며 거래량이 증가할 경우, 새로운 상승 추세의 시작으로 판단하고 매수 관점으로 접근하시는 것이 유리합니다.\n\n"
-    playbook_text += f"• **하방 이탈 시나리오:** 주가가 주요 1차 지지선인 **{sup:,.{decimals}f}{currency}**을 하향 이탈할 경우, 리스크 관리가 최우선입니다. 주가의 실질 변동폭(ATR)을 감안한 안전 손절 라인은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근으로 설정해 두시길 권장해 드립니다.\n\n"
+    
+    # 🌟 수정됨: 하방 이탈 시나리오의 논리 모순(손절가 역전) 교정
+    playbook_text += f"• **하방 방어 시나리오:** 현재 주가의 실질 변동폭(ATR)을 감안한 1차 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근입니다. 만약 이 라인을 내어주어 주요 지지선인 **{sup:,.{decimals}f}{currency}**마저 하향 이탈하게 된다면, 묻지마 반등을 기대하기보다 즉각적인 비중 축소와 리스크 관리를 실행하는 것이 최우선입니다.\n\n"
     
     ai_op += playbook_text
 
