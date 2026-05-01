@@ -256,7 +256,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     prev_candle_close = float(df['Close'].iloc[-2]) if len(df) > 1 else close
     prev_ma20 = float(df['MA20'].iloc[-2]) if len(df) > 1 and not pd.isna(df['MA20'].iloc[-2]) else ma20
-    prev_candle_obv = float(df['OBV'].iloc[-2]) if len(df) > 1 else obv
 
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
     prev_close, prev_obv, prev_rsi = close, obv, rsi  
@@ -440,7 +439,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += "• 매수세가 시장을 주도하는 강세 추세입니다. 단기적인 지표 과열이 나타날 수 있으나, 전체적인 추세가 이탈하지 않는 한 보유 비중을 유지하는 것이 유리합니다.\n\n"
         if rsi < 55: ai_op += "• 현재 가파른 상승 후 일시적으로 가격을 다지는 '눌림목' 현상이 포착되어 매우 긍정적인 진입 시점으로 평가됩니다.\n\n"
     elif regime == "상승 조정":
-        ai_op += "• 전반적인 상승 흐름 속에서 단기적인 매물 소화 및 가격 조정(눌림목)이 진행되고 있습니다. 섣부른 매도보다는 지지선 부근에서의 재진입 기회를 모색하는 것이 바람직합니다.\n\n"
+        ai_op += "• 전반적인 상승 흐름 속에서 단기적인 매물 소화 및 가격 조정(눌림목)이 진행되고 있습니다. 섣부른 매도보다는 지지선 부근에서의 재진입 기회를 모색하는 정략이 바람직합니다.\n\n"
         if near_sup: ai_op += f"• 마침 주가가 의미 있는 주요 지지선({sup:,.{decimals}f}{currency})에 도달했습니다. 안정적인 반등을 기대해 볼 수 있는 구간입니다.\n\n"
     elif regime == "약세 추세":
         ai_op += "• 하락 압력이 지배적인 상황입니다. 이러한 구간에서는 지지선이 비교적 쉽게 이탈될 수 있으므로, 철저한 현금 비중 관리와 보수적인 접근이 필수적입니다.\n\n"
@@ -483,12 +482,10 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += f"🔬 **[심층 분석 및 시장 특이점 판독]**\n\n"
         ai_op += outlier_text + fakeout_text
 
-    
+    # 🌟 수정 완료: 손절가와 지지선의 순서 역전 현상을 완벽하게 방어하는 논리적 문장 구조
     playbook_text = f"📅 **[단기 실전 대응 시나리오 가이드]**\n\n"
     playbook_text += f"• **상방 돌파 시나리오:** 주가가 1차 저항선인 **{res:,.{decimals}f}{currency}**을 강하게 돌파하며 거래량이 증가할 경우, 새로운 상승 추세의 시작으로 판단하고 매수 관점으로 접근하시는 것이 유리합니다.\n\n"
-    
-    # 🌟 수정됨: 하방 이탈 시나리오의 논리 모순(손절가 역전) 교정
-    playbook_text += f"• **하방 방어 시나리오:** 현재 주가의 실질 변동폭(ATR)을 감안한 1차 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근입니다. 만약 이 라인을 내어주어 주요 지지선인 **{sup:,.{decimals}f}{currency}**마저 하향 이탈하게 된다면, 묻지마 반등을 기대하기보다 즉각적인 비중 축소와 리스크 관리를 실행하는 것이 최우선입니다.\n\n"
+    playbook_text += f"• **하방 방어 시나리오:** 현재 주가의 실질 변동폭(ATR)을 감안한 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근이며, 차트상 주요 구조적 지지선은 **{sup:,.{decimals}f}{currency}**에 위치해 있습니다. 이 핵심 방어선들이 강하게 하향 이탈될 경우, 묻지마 반등을 기대하기보다 즉각적인 비중 축소와 리스크 관리를 실행하는 것이 최우선입니다.\n\n"
     
     ai_op += playbook_text
 
@@ -504,7 +501,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정")
-    analyze_mode = st.radio("투자 성향 설정", ["단기 투자 (6개월 차트/일봉)", "장기 투자 (2년 차트/주봉)"])
+    analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
     
     new_search = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_query")
     run_btn = st.button("🚀 분석 실행", type="primary", use_container_width=True)
@@ -512,8 +509,8 @@ with st.sidebar:
     st.markdown(f"""
     <div class="style-box">
     <b>🔍 분석 모드 가이드</b><br>
-    • <b>단기</b>: 최근 6개월의 일봉 파동을 읽어 단기 타점을 포착합니다.<br>
-    • <b>장기</b>: 최근 2년의 <b>주봉(Weekly)</b> 대세 흐름을 판별합니다.
+    • <b>단기 스윙</b>: 최근 6개월의 일봉 파동을 읽어 단기 매매 타점을 포착합니다.<br>
+    • <b>중장기 대세</b>: 최근 2년의 <b>주봉(Weekly)</b> 대세 흐름과 큰 추세를 판별합니다.
     </div>
     """, unsafe_allow_html=True)
     
