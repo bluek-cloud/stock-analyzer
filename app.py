@@ -335,12 +335,11 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
     near_sup = abs(dist_to_sup) <= 5 
     
-    # 🌟 핵심 수정: 박스권 내 현재 가격의 상대적 위치(%) 정밀 계산
     box_height = res - sup
     if box_height > 0:
         box_pos = (close - sup) / box_height * 100
     else:
-        box_pos = 50  # 저항선과 지지선이 겹칠 경우 중간으로 간주
+        box_pos = 50 
 
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
@@ -351,11 +350,14 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             else:
                 pos, strategy = "⚖️ 방향성 대기 (관망)", "볼린저 밴드가 극도로 수축되어 있습니다. 뚜렷한 상방 돌파 시 매수, 하방 이탈 시 즉각적인 손절을 준비하며 상황을 지켜보시길 바랍니다."
         elif regime == "횡보 박스":
-            # 🌟 수정됨: 고정 5% 룰 대신, 박스의 전체 폭을 기준으로 하위 35% / 상위 35% 를 정밀 타겟팅
             if box_pos <= 35 or (rsi <= 40 and box_pos < 50) or bullish_div: 
                 pos, strategy = "🟠 박스권 하단 매수", "박스권 하단 지지선을 확인했거나 의미 있는 반전 시그널이 발생했습니다. 상단 저항선을 목표가로 삼는 단기 트레이딩 전략이 유효합니다."
             elif box_pos >= 65 or (rsi >= 65 and box_pos > 50): 
-                pos, strategy = "🔵 단기 박스권 상단 매도", "박스권 상단 저항선에 근접했습니다. 저항선을 돌파하지 못할 확률이 높으므로 리스크 관리를 위해 비중 축소를 권장해 드립니다."
+                # 🌟 핵심 수정: 박스권 상단에서 수급(OBV) 상태에 따라 돌파 확률을 입체적으로 판단
+                if obv > simple_prev_obv and vol_ratio >= 100:
+                    pos, strategy = "🟠 돌파 기대 (보유)", "상단 저항선에 근접했으나, 긍정적인 수급(OBV) 유입과 모멘텀이 동반되고 있어 저항선 돌파 확률이 존재합니다. 섣부른 매도보다는 돌파 여부를 확인하며 보유 비중을 유지하는 전략이 유리할 수 있습니다."
+                else:
+                    pos, strategy = "🔵 단기 박스권 상단 매도", "박스권 상단 저항선에 근접했으나, 수급 및 모멘텀을 고려할 때 단번에 돌파하기는 쉽지 않아 보입니다. 리스크 관리를 위해 비중 축소를 권장해 드립니다."
             else: 
                 pos, strategy = "⚖️ 단기 관망", "박스권 중간 지대에 위치해 있습니다. 무리한 진입보다는 주가가 지지선이나 저항선에 확실히 도달할 때까지 기다리시길 바랍니다."
         elif regime == "강세 추세":
@@ -390,7 +392,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         "🔴 추세 눌림목 적극 매수", "🟠 박스권 하단 매수",
         "🔴 비중 확대 (장기)", "🟠 저점 분할 매집",
         "🔴 돌파 추세 추종", "🟠 단기 기술적 반등 공략",
-        "🔴 응축 구간 선취매"
+        "🔴 응축 구간 선취매", "🟠 돌파 기대 (보유)"
     }
     sell_positions = {
         "🔷 단기 적극 매도", "🔵 단기 분할 매도",
@@ -445,9 +447,11 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += "• 현재 볼린저 밴드의 폭이 최근 6개월 내 최저 수준으로 압축된 **[변동성 응축(Squeeze)]** 상태입니다. 곧 뚜렷한 방향성을 나타낼 가능성이 높으므로 주가의 움직임을 주의 깊게 살펴보시기 바랍니다.\n\n"
     elif regime == "횡보 박스":
         ai_op += "• 뚜렷한 방향성 없이 일정한 구간에서 에너지를 비축하는 횡보장입니다. 기술적 지표의 단기 신호를 활용하는 박스권 매매 전략이 유리할 수 있습니다.\n\n"
-        # 🌟 텍스트 해설도 상대적 위치(box_pos) 기반으로 완벽 교정
         if box_pos <= 35: ai_op += f"• 현재 주가가 주요 하단 지지선({sup:,.{decimals}f}{currency})에 근접하여 상대적으로 매수 매력도가 높은 구간입니다.\n\n"
-        elif box_pos >= 65: ai_op += f"• 현재 주가가 상단 저항선({res:,.{decimals}f}{currency})에 근접하여 단기 차익 실현 및 비중 축소를 고려해야 할 구간입니다.\n\n"
+        # 🌟 해설부 수정: 수급에 따른 돌파 가능성 언급 추가
+        elif box_pos >= 65: 
+            if obv > simple_prev_obv: ai_op += f"• 현재 주가가 상단 저항선({res:,.{decimals}f}{currency})에 근접했으나, 긍정적인 수급이 유입되고 있어 돌파 가능성을 예의주시할 필요가 있습니다.\n\n"
+            else: ai_op += f"• 현재 주가가 상단 저항선({res:,.{decimals}f}{currency})에 근접하여 단기 차익 실현 및 비중 축소를 고려해야 할 구간입니다.\n\n"
     elif regime == "강세 추세":
         ai_op += "• 매수세가 시장을 주도하는 강세 추세입니다. 단기적인 지표 과열이 나타날 수 있으나, 전체적인 추세가 이탈하지 않는 한 보유 비중을 유지하는 것이 유리합니다.\n\n"
         if rsi < 55: ai_op += "• 현재 가파른 상승 후 일시적으로 가격을 다지는 '눌림목' 현상이 포착되어 매우 긍정적인 진입 시점으로 평가됩니다.\n\n"
