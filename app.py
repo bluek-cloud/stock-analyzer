@@ -648,7 +648,7 @@ if target_query:
                 st.info(comments.get('AI'))
 
             # ==========================================
-            # 🌟 완전 고정형 및 능동 반응형 차트 (배치 순서 및 높이 최적화 적용)
+            # 🌟 완전 고정형 및 능동 반응형 차트 (반응형 하이브리드 높이/비율 적용)
             # ==========================================
             tab1, tab2 = st.tabs(["📈 차트 & 보조지표", "📊 수급 에너지(OBV)"])
             
@@ -672,7 +672,7 @@ if target_query:
                 y_range = None
 
             with tab1:
-                # 🌟 모바일 뷰 찌그러짐 방지: 3단 비율을 (0.55 : 0.2 : 0.25) 황금비율로 조정
+                # 🌟 모바일에서 찌그러짐을 방지하기 위해 전체 높이에 맞춰 비율(row_heights)을 최적화
                 fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.20, 0.25], vertical_spacing=0.03)
                 
                 # 1. 주가 캔들 차트 (Row 1)
@@ -682,18 +682,20 @@ if target_query:
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
                 
-                # 2. RSI 차트 (Row 2 - 순서 변경 완료)
+                # 2. RSI 차트 (Row 2)
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
                 fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
                 fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
                 fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
 
-                # 3. 거래량 차트 (Row 3 - 순서 변경 완료)
+                # 3. 거래량 차트 (Row 3)
                 colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(plot_df['Close'], plot_df['Open'])]
                 fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
                 
                 fig.update_layout(
-                    height=600, # 🌟 모바일 세로 찌그러짐 방지: 700px -> 600px로 최적화
+                    # 🌟 반응형을 위해 높이를 너무 길지 않게 설정 (모바일에서 쾌적하도록)
+                    # 만약 여전히 길게 느껴지시면 이 값을 550 정도로 줄이셔도 좋습니다.
+                    height=600, 
                     margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode=False, 
                     hovermode='x unified', showlegend=False
@@ -709,6 +711,7 @@ if target_query:
                 fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
                 fig.update_yaxes(fixedrange=True, row=3, col=1)
                 
+                # use_container_width=True 설정을 유지하여 PC/모바일 가로폭 자동 대응
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
                 
             with tab2:
