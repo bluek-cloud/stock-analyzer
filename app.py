@@ -205,7 +205,6 @@ def detect_patterns_and_levels(df):
         below = closes[closes <= latest['Close']]
         support = below.min() if not below.empty else closes.min()
 
-    # 저항선 신고가 예외 처리
     above = closes[closes > latest['Close']] 
     if above.empty:
         resistance = 0  
@@ -233,6 +232,9 @@ def get_stock_data(code):
     except: return pd.DataFrame()
 
 def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, weekly_bullish=None):
+    # 🌟 폰트 깨짐(수식 오류) 방지를 위해 마크다운용 통화 기호 생성 ($ -> \$)
+    md_currency = currency.replace('$', r'\$')
+    
     latest = df.iloc[-1]
     close = float(latest['Close'])
     rsi = float(latest['RSI']) if not pd.isna(latest['RSI']) else 50
@@ -296,19 +298,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     drop_pct = ((prev_candle_close - close) / prev_candle_close * 100) if prev_candle_close > 0 else 0
     is_falling_knife = (drop_pct >= 7.0 and vol_ratio >= 120) or (drop_pct >= 10.0)
 
-    if is_squeeze:
-        regime = "에너지 응축 (스퀴즈)"
-    elif vol_ratio >= 150 and adx > prev_adx and adx > 20:
-        regime = "변동성 폭발"
-    elif adx < 25:
-        regime = "횡보 박스"
+    if is_squeeze: regime = "에너지 응축 (스퀴즈)"
+    elif vol_ratio >= 150 and adx > prev_adx and adx > 20: regime = "변동성 폭발"
+    elif adx < 25: regime = "횡보 박스"
     elif ma20 >= ma60 and close >= ma60: 
-        if p_di > m_di and close >= ma20:
-            regime = "강세 추세"
-        else:
-            regime = "상승 조정" 
-    else:
-        regime = "약세 추세"
+        if p_di > m_di and close >= ma20: regime = "강세 추세"
+        else: regime = "상승 조정" 
+    else: regime = "약세 추세"
 
     comments = {}
     comments['ADX'] = f"현재 ADX 추세강도 지수는 **{adx:.1f}**이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
@@ -333,8 +329,10 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기 모멘텀이 평소의 범위를 벗어나 급격하게 방향성을 분출하고 있습니다."
 
     comments['VOL'] = f"상대 거래량이 평균 대비 **{vol_ratio:.0f}%** 수준입니다. " + ("대량 거래가 터지며 시장의 강한 이목이 집중되었습니다." if vol_ratio > 150 else "평이한 수준의 거래가 이뤄지고 있습니다.")
+    
+    # 🌟 md_currency 적용
     comments['OBV'] = f"최근 {obv_lookback}{time_unit}간 누적 수급(OBV)이 **{'상승(자금 유입)' if obv > simple_prev_obv else '하락(자금 이탈)'}** 중입니다."
-    comments['ATR'] = f"예상되는 실질 변동폭(ATR)은 주당 평균 **{vol_pct:.1f}% ({atr:,.{decimals}f}{currency})** 수준입니다."
+    comments['ATR'] = f"예상되는 실질 변동폭(ATR)은 주당 평균 **{vol_pct:.1f}% ({atr:,.{decimals}f}{md_currency})** 수준입니다."
 
     dist_to_sup = (close - sup) / sup * 100 if sup > 0 else 100
     near_sup = abs(dist_to_sup) <= 5 
@@ -457,7 +455,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += "• 현재 볼린저 밴드의 폭이 최근 6개월 내 최저 수준으로 압축된 **[변동성 응축(Squeeze)]** 상태입니다. 곧 뚜렷한 방향성을 나타낼 가능성이 높으므로 주가의 움직임을 주의 깊게 살펴보시기 바랍니다.\n\n"
     elif regime == "횡보 박스":
         ai_op += "• 뚜렷한 방향성 없이 일정한 구간에서 에너지를 비축하는 횡보장입니다. 기술적 지표의 단기 신호를 활용하는 박스권 매매 전략이 유리할 수 있습니다.\n\n"
-        if box_pos <= 35: ai_op += f"• 현재 주가가 주요 하단 지지선({sup:,.{decimals}f}{currency})에 근접하여 상대적으로 매수 매력도가 높은 구간입니다.\n\n"
+        # 🌟 md_currency 적용
+        if box_pos <= 35: ai_op += f"• 현재 주가가 주요 하단 지지선({sup:,.{decimals}f}{md_currency})에 근접하여 상대적으로 매수 매력도가 높은 구간입니다.\n\n"
         elif box_pos >= 65 and res > 0: 
             if obv > simple_prev_obv: ai_op += f"• 현재 주가가 상단 저항선 부근에 위치했으나, 긍정적인 수급이 유입되고 있어 돌파 가능성을 예의주시할 필요가 있습니다.\n\n"
             else: ai_op += f"• 현재 주가가 상단 저항선 부근에 위치하여 단기 차익 실현 및 비중 축소를 고려해야 할 구간입니다.\n\n"
@@ -466,7 +465,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         if rsi < 55 and not is_falling_knife: ai_op += "• 현재 가파른 상승 후 일시적으로 가격을 다지는 '눌림목' 현상이 포착되어 매우 긍정적인 진입 시점으로 평가됩니다.\n\n"
     elif regime == "상승 조정":
         ai_op += "• 전반적인 상승 흐름 속에서 단기적인 매물 소화 및 가격 조정(눌림목)이 진행되고 있습니다. 섣부른 매도보다는 지지선 부근에서의 재진입 기회를 모색하는 정략이 바람직합니다.\n\n"
-        if near_sup and not is_falling_knife: ai_op += f"• 마침 주가가 의미 있는 주요 지지선({sup:,.{decimals}f}{currency})에 도달했습니다. 안정적인 반등을 기대해 볼 수 있는 구간입니다.\n\n"
+        # 🌟 md_currency 적용
+        if near_sup and not is_falling_knife: ai_op += f"• 마침 주가가 의미 있는 주요 지지선({sup:,.{decimals}f}{md_currency})에 도달했습니다. 안정적인 반등을 기대해 볼 수 있는 구간입니다.\n\n"
     elif regime == "약세 추세":
         ai_op += "• 하락 압력이 지배적인 상황입니다. 이러한 구간에서는 지지선이 비교적 쉽게 이탈될 수 있으므로, 철저한 현금 비중 관리와 보수적인 접근이 필수적입니다.\n\n"
         if rsi >= 45 and close > prev_candle_close and not is_falling_knife: ai_op += "• 현재 나타나는 반등이 단순한 '데드캣 바운스'인지, 수급을 동반한 '진짜 턴어라운드'인지 거래량을 통해 철저히 검증해야 합니다.\n\n"
@@ -512,9 +512,11 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     if res == 0:
         playbook_text += f"• **상방 추세 시나리오:** 현재 과거의 모든 저항을 돌파한 신고가(상방 열림) 상태입니다. 거래량이 동반되며 상승 모멘텀이 유지된다면, 목표가를 열어두고 수익을 극대화하는 매수/홀딩 관점이 유리합니다.\n\n"
     else:
-        playbook_text += f"• **상방 돌파 시나리오:** 주가가 1차 저항선인 **{res:,.{decimals}f}{currency}**을 강하게 돌파하며 거래량이 증가할 경우, 새로운 상승 추세의 시작으로 판단하고 매수 관점으로 접근하시는 것이 유리합니다.\n\n"
+        # 🌟 md_currency 적용
+        playbook_text += f"• **상방 돌파 시나리오:** 주가가 1차 저항선인 **{res:,.{decimals}f}{md_currency}**을 강하게 돌파하며 거래량이 증가할 경우, 새로운 상승 추세의 시작으로 판단하고 매수 관점으로 접근하시는 것이 유리합니다.\n\n"
         
-    playbook_text += f"• **하방 방어 시나리오:** 현재 주가의 실질 변동폭(ATR)을 감안한 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{currency}** 부근이며, 차트상 주요 구조적 지지선은 **{sup:,.{decimals}f}{currency}**에 위치해 있습니다. 이 핵심 방어선들이 강하게 하향 이탈될 경우, 묻지마 반등을 기대하기보다 즉각적인 비중 축소와 리스크 관리를 실행하는 것이 최우선입니다.\n\n"
+    # 🌟 md_currency 적용
+    playbook_text += f"• **하방 방어 시나리오:** 현재 주가의 실질 변동폭(ATR)을 감안한 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근이며, 차트상 주요 구조적 지지선은 **{sup:,.{decimals}f}{md_currency}**에 위치해 있습니다. 이 핵심 방어선들이 강하게 하향 이탈될 경우, 묻지마 반등을 기대하기보다 즉각적인 비중 축소와 리스크 관리를 실행하는 것이 최우선입니다.\n\n"
     
     ai_op += playbook_text
 
@@ -594,6 +596,7 @@ if target_query:
         cur_price = raw_df['Close'].iloc[-1]
         diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
         st.subheader(f"📑 {display_name} 리포트")
+        # st.metric은 마크다운 파싱을 안하므로 원본 currency 사용
         st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
 
         q_score = calculate_quant_score(chart_df, is_short_term)
@@ -618,12 +621,15 @@ if target_query:
                     p_text = ", ".join(pts) if pts else "포착된 특이 패턴이 없습니다."
                     st.write(f"📍 **패턴:** {p_text}")
                     
-                    sup_text = f"{sup:,.{decimals}f} {currency}" if sup > 0 else "데이터 부족"
+                    # 🌟 UI 화면 출력용 마크다운 이스케이프 적용
+                    md_currency_ui = currency.replace('$', r'\$')
+                    
+                    sup_text = f"{sup:,.{decimals}f} {md_currency_ui}" if sup > 0 else "데이터 부족"
                     
                     if res == 0:
                         res_text = "✨ 신고가 돌파 (저항 없음)"
                     elif res > 0:
-                        res_text = f"{res:,.{decimals}f} {currency}"
+                        res_text = f"{res:,.{decimals}f} {md_currency_ui}"
                     else:
                         res_text = "데이터 부족"
                         
@@ -693,8 +699,6 @@ if target_query:
                 fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
                 
                 fig.update_layout(
-                    # 🌟 반응형을 위해 높이를 너무 길지 않게 설정 (모바일에서 쾌적하도록)
-                    # 만약 여전히 길게 느껴지시면 이 값을 550 정도로 줄이셔도 좋습니다.
                     height=600, 
                     margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode=False, 
@@ -711,7 +715,6 @@ if target_query:
                 fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
                 fig.update_yaxes(fixedrange=True, row=3, col=1)
                 
-                # use_container_width=True 설정을 유지하여 PC/모바일 가로폭 자동 대응
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
                 
             with tab2:
