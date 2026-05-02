@@ -205,6 +205,7 @@ def detect_patterns_and_levels(df):
         below = closes[closes <= latest['Close']]
         support = below.min() if not below.empty else closes.min()
 
+    # 저항선 신고가 예외 처리
     above = closes[closes > latest['Close']] 
     if above.empty:
         resistance = 0  
@@ -647,9 +648,9 @@ if target_query:
                 st.info(comments.get('AI'))
 
             # ==========================================
-            # 🌟 완전 고정형 및 능동 반응형 차트 (거래량 차트 3단 업그레이드)
+            # 🌟 완전 고정형 및 능동 반응형 차트 (배치 순서 및 높이 최적화 적용)
             # ==========================================
-            tab1, tab2 = st.tabs(["📈 주가 & 거래량 & RSI", "📊 수급 에너지(OBV)"])
+            tab1, tab2 = st.tabs(["📈 차트 & 보조지표", "📊 수급 에너지(OBV)"])
             
             data_start_date = chart_df.index[0]
             calculated_start_date = datetime.now() - timedelta(days=default_days)
@@ -671,8 +672,8 @@ if target_query:
                 y_range = None
 
             with tab1:
-                # 🌟 3단 구조로 행(row)을 3개로 확장
-                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.03)
+                # 🌟 모바일 뷰 찌그러짐 방지: 3단 비율을 (0.55 : 0.2 : 0.25) 황금비율로 조정
+                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.20, 0.25], vertical_spacing=0.03)
                 
                 # 1. 주가 캔들 차트 (Row 1)
                 fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name='주가'), row=1, col=1)
@@ -681,31 +682,32 @@ if target_query:
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'20{time_unit}선', line=dict(color='orange', width=1)), row=1, col=1)
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'60{time_unit}선', line=dict(color='green', width=1)), row=1, col=1)
                 
-                # 2. 거래량 차트 추가 (Row 2) - 양봉/음봉 색상 구분
-                colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(plot_df['Close'], plot_df['Open'])]
-                fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='거래량', marker_color=colors), row=2, col=1)
-                
-                # 3. RSI 차트 (Row 3)
-                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=3, col=1)
-                fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=3, col=1)
-                fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=3, col=1)
-                fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=3, col=1)
+                # 2. RSI 차트 (Row 2 - 순서 변경 완료)
+                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+                fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
 
+                # 3. 거래량 차트 (Row 3 - 순서 변경 완료)
+                colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(plot_df['Close'], plot_df['Open'])]
+                fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
+                
                 fig.update_layout(
-                    height=700, # 🌟 3단 차트에 맞춰 높이를 700으로 여유있게 확장
+                    height=600, # 🌟 모바일 세로 찌그러짐 방지: 700px -> 600px로 최적화
                     margin=dict(t=10, b=10, l=0, r=0), 
                     dragmode=False, 
                     hovermode='x unified', showlegend=False
                 )
                 
-                # X축, Y축 설정
+                # X축 세팅
                 fig.update_xaxes(range=[final_start_date, datetime.now()], rangeslider=dict(visible=False), fixedrange=True, row=1, col=1)
                 fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=2, col=1)
                 fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True, row=3, col=1)
                 
+                # Y축 세팅
                 fig.update_yaxes(range=y_range, fixedrange=True, row=1, col=1)
-                fig.update_yaxes(fixedrange=True, row=2, col=1)
-                fig.update_yaxes(range=[0, 100], fixedrange=True, row=3, col=1)
+                fig.update_yaxes(range=[0, 100], fixedrange=True, row=2, col=1)
+                fig.update_yaxes(fixedrange=True, row=3, col=1)
                 
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
                 
