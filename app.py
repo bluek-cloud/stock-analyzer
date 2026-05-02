@@ -36,11 +36,12 @@ st.markdown("---")
 
 if 'recent_searches' not in st.session_state:
     st.session_state.recent_searches = []
-
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'trigger_search' not in st.session_state:
     st.session_state.trigger_search = False
+if 'target_query' not in st.session_state:       # 모바일 rerun 시 분석 결과 유지
+    st.session_state.target_query = None
 
 def on_recent_click(query):
     st.session_state.search_query = query
@@ -262,7 +263,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     prev_ma20 = float(df['MA20'].iloc[-2]) if len(df) > 1 and not pd.isna(df['MA20'].iloc[-2]) else ma20
 
     swing_lookback = min(60, len(df) - 1) if len(df) > 1 else 1
-    prev_close, prev_obv, prev_rsi = close, obv, rsi  
+    prev_close, prev_obv, prev_rsi = close, obv, rsi
+    bullish_div = False  # 기본값 선언
     if swing_lookback > 5:
         past_df = df.iloc[-swing_lookback:-1]
         local_min_mask = (
@@ -273,14 +275,18 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         )
         local_min_df = past_df[local_min_mask]
         if len(local_min_df) >= 2:
-            trough1_idx = local_min_df.index[-2]  
-            trough2_idx = local_min_df.index[-1]  
-            prev_close = float(df.loc[trough1_idx, 'Close'])
-            prev_obv   = float(df.loc[trough1_idx, 'OBV'])
-            prev_rsi   = float(df.loc[trough1_idx, 'RSI']) if not pd.isna(df.loc[trough1_idx, 'RSI']) else 50
+            trough1_idx = local_min_df.index[-2]  # 과거(오래된) 저점
+            trough2_idx = local_min_df.index[-1]  # 최근 저점
+            trough1_close = float(df.loc[trough1_idx, 'Close'])
+            trough1_obv   = float(df.loc[trough1_idx, 'OBV'])
+            trough1_rsi   = float(df.loc[trough1_idx, 'RSI']) if not pd.isna(df.loc[trough1_idx, 'RSI']) else 50
             trough2_close = float(df.loc[trough2_idx, 'Close'])
             trough2_obv   = float(df.loc[trough2_idx, 'OBV'])
             trough2_rsi   = float(df.loc[trough2_idx, 'RSI']) if not pd.isna(df.loc[trough2_idx, 'RSI']) else 50
+            # ✅ 진짜 다이버전스: 저점1 → 저점2 비교 (가격 낮아졌는데 지표는 올라옴)
+            bullish_div = (trough2_close < trough1_close) and \
+                          (trough2_obv > trough1_obv or trough2_rsi > trough1_rsi)
+            # 지지/저항 계산 등에서 참조할 최근 저점 기준값
             prev_close, prev_obv, prev_rsi = trough2_close, trough2_obv, trough2_rsi
         elif len(local_min_df) == 1:
             min_idx = local_min_df.index[-1]
@@ -343,8 +349,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     else:
         box_pos = 100
 
-    bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
-    
     if is_short_term:
         if is_falling_knife: 
             pos, strategy = "🔷 투매 진행 중 (절대 관망)", "대량 거래를 동반한 치명적인 급락(장대음봉)이 발생했습니다. 지표상 과매도 구간이더라도 '떨어지는 칼날'일 확률이 매우 높으므로, 하락세가 완전히 진정될 때까지 절대 섣부른 매수를 금지합니다."
@@ -402,9 +406,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     q_score = calculate_quant_score(df, is_short_term)
     buy_positions  = {
-        "🔴 단기 적극 매수", "🟠 단기 분할 매수", "🔴 추세 눌림목 적극 매수", "🟠 박스권 하단 매수",
-        "🔴 비중 확대 (장기)", "🟠 저점 분할 매집", "🔴 돌파 추세 추종", "🟠 단기 기술적 반등 공략",
-        "🔴 응축 구간 선취매", "🟠 돌파 기대 (보유)", "🔴 신고가 랠리 (강력 홀딩)", "🟠 의미 있는 반등 시도"
+        "🔴 단기 적극 매수", "🟠 단기 분할 매수",
+        "🔴 추세 눌림목 적극 매수", "🟠 추세 눌림목 적극 매수",  # 🟠 버전 추가
+        "🟠 박스권 하단 매수", "🟠 추세 보유 (홀딩)",             # 홀딩 추가
+        "🔴 비중 확대 (장기)", "🟠 저점 분할 매집",
+        "🔴 돌파 추세 추종", "🟠 단기 기술적 반등 공략",
+        "🔴 응축 구간 선취매", "🟠 돌파 기대 (보유)",
+        "🔴 신고가 랠리 (강력 홀딩)", "🟠 의미 있는 반등 시도"
     }
     sell_positions = {
         "🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔵 단기 박스권 상단 매도", "🔵 분할 익절",
@@ -545,16 +553,17 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     
-    target_query = None
+    # 버튼/최근검색 클릭 시에만 갱신, 그 외 rerun에서는 기존 값 유지
     if run_btn or st.session_state.trigger_search:
-        target_query = st.session_state.search_query
+        st.session_state.target_query = st.session_state.search_query
         st.session_state.trigger_search = False
-        
-        if target_query:
-            display_name, ticker_symbol, raw_query, currency, decimals = parse_query(target_query)
+        if st.session_state.target_query:
+            display_name, ticker_symbol, raw_query, currency, decimals = parse_query(st.session_state.target_query)
             if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
                 st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
                 st.session_state.recent_searches = st.session_state.recent_searches[:5]
+
+    target_query = st.session_state.target_query  # rerun 후에도 이전 분석 유지
     
     st.divider()
     st.subheader("🕒 최근 검색")
