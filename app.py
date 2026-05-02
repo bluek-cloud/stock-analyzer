@@ -205,7 +205,7 @@ def detect_patterns_and_levels(df):
         below = closes[closes <= latest['Close']]
         support = below.min() if not below.empty else closes.min()
 
-    # 🌟 저항선 신고가 예외 처리 (수정 완료)
+    # 저항선 신고가 예외 처리
     above = closes[closes > latest['Close']] 
     if above.empty:
         resistance = 0  
@@ -293,9 +293,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     prev_adx = float(df['ADX'].iloc[-2]) if len(df) > 1 and not pd.isna(df['ADX'].iloc[-2]) else 0
     
-    # 🌟 [초강력 방어막 1] 떨어지는 칼날 (투매) 감지기 추가
+    # [초강력 방어막 1] 떨어지는 칼날 (투매) 감지기
     drop_pct = ((prev_candle_close - close) / prev_candle_close * 100) if prev_candle_close > 0 else 0
-    # 전일 대비 7% 이상 하락하면서 거래량이 평균 120%를 넘거나, 무조건 10% 이상 하락한 경우
     is_falling_knife = (drop_pct >= 7.0 and vol_ratio >= 120) or (drop_pct >= 10.0)
 
     if is_squeeze:
@@ -349,11 +348,11 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     bullish_div = (close < prev_close) and (obv > prev_obv or rsi > prev_rsi)
     
-    # 🌟 최상위 오버라이드 및 정밀 로직 분기점
+    # 최상위 오버라이드 및 정밀 로직 분기점
     if is_short_term:
-        if is_falling_knife: # [방어막 1] 떨어지는 칼날 락(Lock)
+        if is_falling_knife: 
             pos, strategy = "🔷 투매 진행 중 (절대 관망)", "대량 거래를 동반한 치명적인 급락(장대음봉)이 발생했습니다. 지표상 과매도 구간이더라도 '떨어지는 칼날'일 확률이 매우 높으므로, 하락세가 완전히 진정될 때까지 절대 섣부른 매수를 금지합니다."
-        elif res == 0 and close > prev_candle_close: # [방어막 2] 신고가 랠리 모순 차단
+        elif res == 0 and close > prev_candle_close: 
             pos, strategy = "🔴 신고가 랠리 (강력 홀딩)", "과거의 모든 저항을 뚫어낸 신고가(또는 단기 고점 돌파) 랠리가 진행 중입니다. 섣불리 고점을 예측하여 매도하기보다는, 추세가 꺾일 때까지 수익을 극대화하는 전략이 유효합니다."
         elif regime == "에너지 응축 (스퀴즈)":
             if bullish_div:
@@ -361,13 +360,16 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             else:
                 pos, strategy = "⚖️ 방향성 대기 (관망)", "볼린저 밴드가 극도로 수축되어 있습니다. 뚜렷한 상방 돌파 시 매수, 하방 이탈 시 즉각적인 손절을 준비하며 상황을 지켜보시길 바랍니다."
         elif regime == "횡보 박스":
+            # 🌟 3단 정밀 판독기 적용 완료
             if box_pos <= 35 or (rsi <= 40 and box_pos < 50) or bullish_div: 
                 pos, strategy = "🟠 박스권 하단 매수", "박스권 하단 지지선을 확인했거나 의미 있는 반전 시그널이 발생했습니다. 상단 저항선을 목표가로 삼는 단기 트레이딩 전략이 유효합니다."
             elif box_pos >= 65 or (rsi >= 65 and box_pos > 50): 
                 if obv > simple_prev_obv and vol_ratio >= 100:
-                    pos, strategy = "🟠 돌파 기대 (보유)", "상단 저항선에 근접했으나, 긍정적인 수급(OBV) 유입과 모멘텀이 동반되고 있어 저항선 돌파 확률이 존재합니다. 섣부른 매도보다는 돌파 여부를 확인하며 보유 비중을 유지하는 전략이 유리할 수 있습니다."
+                    pos, strategy = "🟠 돌파 기대 (보유)", "상단 저항선에 근접했으나, 긍정적인 누적 수급(OBV)과 강한 거래량이 동반되고 있어 돌파 확률이 높습니다. 홀딩하며 돌파 여부를 확인하시길 권장합니다."
+                elif obv > simple_prev_obv and vol_ratio < 100:
+                    pos, strategy = "⚖️ 돌파 탐색 (관망/분할매도)", "누적 수급(OBV)은 긍정적이나, 상단 저항선을 단번에 뚫어낼 폭발적인 거래량이 당장은 부족한 상태입니다. 돌파 여부를 관찰하며 보수적으로 일부 비중 축소를 고려해 볼 수 있습니다."
                 else:
-                    pos, strategy = "🔵 단기 박스권 상단 매도", "박스권 상단 저항선에 근접했으나, 수급 및 모멘텀을 고려할 때 단번에 돌파하기는 쉽지 않아 보입니다. 리스크 관리를 위해 비중 축소를 권장해 드립니다."
+                    pos, strategy = "🔵 단기 박스권 상단 매도", "박스권 상단 저항선에 도달했으나 누적 수급마저 이탈하고 있습니다. 단번에 돌파하기는 매우 어려워 보이므로, 리스크 관리를 위해 적극적인 비중 축소를 권장합니다."
             else: 
                 pos, strategy = "⚖️ 단기 관망", "박스권 중간 지대에 위치해 있습니다. 무리한 진입보다는 주가가 지지선이나 저항선에 확실히 도달할 때까지 기다리시길 바랍니다."
         elif regime == "강세 추세":
@@ -378,7 +380,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             if near_sup or rsi <= 45 or bullish_div: pos, strategy = "🟠 추세 눌림목 적극 매수", "상승장 속에서 발생한 건전한 단기 조정 국면입니다. 지지선 부근에서 분할 매수로 접근하기 좋은 시점입니다."
             else: pos, strategy = "⚖️ 단기 관망", "단기적인 가격 조정이 진행 중입니다. 하락세가 진정되고 지지선에서 확고한 반등 시그널이 나타날 때까지 대기하시길 권장합니다."
         elif regime == "약세 추세":
-            # 🌟 [방어막 3] 데드캣 바운스 입체 분석
             if rsi >= 45 and close > prev_candle_close:
                 if obv > simple_prev_obv and vol_ratio > 100:
                     pos, strategy = "🟠 의미 있는 반등 시도", "하락 추세 속에서 강한 거래량과 수급(OBV)을 동반한 반등이 나오고 있습니다. 추세 전환의 단초가 될 수 있으므로 관심 종목으로 지켜보시길 바랍니다."
@@ -413,13 +414,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     sell_positions = {
         "🔷 단기 적극 매도", "🔵 단기 분할 매도", "🔵 단기 박스권 상단 매도", "🔵 분할 익절",
         "🔷 비중 축소 (장기)", "🔷 적극 매도 및 관망", "🔷 패닉셀 회피 (적극 매도)",
-        "🔷 투매 진행 중 (절대 관망)", "🔵 데드캣 바운스 경계 (매도)"
+        "🔷 투매 진행 중 (절대 관망)", "🔵 데드캣 바운스 경계 (매도)", "⚖️ 돌파 탐색 (관망/분할매도)"
     }
     
     if pos in buy_positions and q_score < 30:
         pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
         strategy = f"매수 신호가 감지되었으나 전체 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 시장 상황을 조금 더 확인하신 후 진입하시길 권장합니다."
-    elif pos in sell_positions and q_score > 70 and not is_falling_knife: # 투매일때는 퀀트점수 높아도 무시
+    elif pos in sell_positions and q_score > 70 and not is_falling_knife: 
         pos      = "⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"
         strategy = f"매도 신호가 감지되었으나 전체 퀀트 스코어({q_score}점)가 양호하여 지표 간 상충이 발생했습니다. 뚜렷한 방향성을 확인하신 후 대응하시길 바랍니다."
 
@@ -450,7 +451,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     
     ai_op += f"💡 **[국면 맞춤형 통합 해석]**\n\n"
     
-    # 🌟 떨어지는 칼날 코멘터리 강제 삽입
     if is_falling_knife:
         ai_op += "🚨 **[초고위험 투매 경보]** 현재 주가가 비정상적인 속도로 극심하게 급락하고 있습니다. 시스템은 이를 '패닉셀(투매)'로 규정하며, 어떠한 기술적 반등 신호도 무시하고 철저히 관망할 것을 강력히 권고합니다.\n\n"
     elif res == 0:
