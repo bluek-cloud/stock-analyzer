@@ -40,6 +40,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# 🌟 누락되었던 핵심 함수 복구 완료!
+def on_recent_click(query):
+    st.session_state.target_query = query
+    st.session_state.trigger_search = True
+
 # ==========================================
 # 2. 공통 데이터 처리 함수
 # ==========================================
@@ -349,7 +354,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 # ==========================================
 def scan_200_pullback(top_n=200):
     krx_df = get_krx_data()
-    # 시가총액 기준 정렬 (A조건 우회 충족 및 속도 최적화)
     krx_df['Marcap'] = pd.to_numeric(krx_df['Marcap'], errors='coerce')
     target_stocks = krx_df.sort_values('Marcap', ascending=False).head(top_n)
     
@@ -357,7 +361,7 @@ def scan_200_pullback(top_n=200):
     progress_bar = st.progress(0, text="📡 우량주 차트 데이터 수집 및 조건 스캔 중...")
     
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=400) # 200일선 계산을 위해 넉넉한 데이터 확보
+    start_date = end_date - timedelta(days=400) 
     
     for i, (idx, row) in enumerate(target_stocks.iterrows()):
         progress_bar.progress((i + 1) / top_n, text=f"📡 스캔 중... ({i+1}/{top_n}) - {row['Name']}")
@@ -371,17 +375,13 @@ def scan_200_pullback(top_n=200):
             latest = df.iloc[-1]
             prev = df.iloc[-2]
             
-            # C 조건: 200일선 10일 연속 상승 (우상향 추세)
             ma200_diff = df['MA200'].diff().tail(10)
             if (ma200_diff <= 0).any(): continue
             
-            # E 조건: 1봉전 저가가 200일선의 98% ~ 103% 이내 (정확한 터치/언더슈팅)
             if not (0.98 <= prev['Low'] / prev['MA200'] <= 1.03): continue
             
-            # G 조건: 0봉전(오늘) 양봉
             if latest['Close'] <= latest['Open']: continue
             
-            # H 조건: 0봉전(오늘) 종가가 5일선 골든크로스 (단기 추세 전환)
             if not (prev['Close'] <= prev['MA5'] and latest['Close'] > latest['MA5']): continue
             
             found_stocks.append({
@@ -411,6 +411,8 @@ if app_menu == "📊 단일 종목 심층 분석":
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
         new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input")
+        
+        # 엔터 키 반응형으로 UX 편의성 개선
         if st.button("🚀 분석 실행", type="primary") or (new_query and new_query != st.session_state.target_query):
             st.session_state.target_query = new_query
             st.session_state.trigger_search = False
@@ -421,7 +423,6 @@ if app_menu == "📊 단일 종목 심층 분석":
         for idx, item in enumerate(st.session_state.recent_searches):
             st.button(f"▪️ {item['display_name']}", key=f"rs_{idx}_{item['query']}", use_container_width=True, on_click=on_recent_click, args=(item['query'],))
 
-    # [기존 차트 및 분석 결과 출력부 - 이전 마스터 코드와 동일하게 유지]
     if st.session_state.target_query:
         display_name, ticker_symbol, raw_query, currency, decimals = parse_query(st.session_state.target_query)
         if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
@@ -556,7 +557,6 @@ elif app_menu == "🎯 200일선 눌림목 포착 (NEW)":
         st.divider()
         if not result_df.empty:
             st.success(f"🎉 축하합니다! 완벽한 눌림목 타점 종목 {len(result_df)}개를 포착했습니다.")
-            # 포맷팅 적용
             result_df['현재가'] = result_df['현재가'].apply(lambda x: f"{x:,} 원")
             result_df['200일선'] = result_df['200일선'].apply(lambda x: f"{x:,} 원")
             
