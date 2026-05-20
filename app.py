@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # ==========================================
-# 1. 페이지 설정 및 세션 관리
+# 1. 페이지 설정 및 세션 관리 (모바일/엔터 초기화 버그 완벽 패치)
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
@@ -40,10 +40,16 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 🌟 누락되었던 핵심 함수 복구 완료!
+# 🌟 최근 검색어 클릭 시 텍스트 입력창까지 완벽 동기화하여 레이스 컨디션 차단
 def on_recent_click(query):
     st.session_state.target_query = query
+    st.session_state.search_input = query
     st.session_state.trigger_search = True
+
+# 🌟 엔터키 입력 시 독립적으로 타겟 쿼리를 갱신하는 텍스트 입력창 전용 콜백
+def on_search_input_change():
+    if st.session_state.search_input:
+        st.session_state.target_query = st.session_state.search_input
 
 # ==========================================
 # 2. 공통 데이터 처리 함수
@@ -410,11 +416,13 @@ if app_menu == "📊 단일 종목 심층 분석":
     with st.sidebar:
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
-        new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input")
         
-        # 엔터 키 반응형으로 UX 편의성 개선
-        if st.button("🚀 분석 실행", type="primary") or (new_query and new_query != st.session_state.target_query):
-            st.session_state.target_query = new_query
+        # 🌟 엔터키 및 클릭 상태 교임 완벽 방지: 콜백과 네이티브 세션 연동
+        new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
+        
+        if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
+            if st.session_state.search_input and not st.session_state.trigger_search:
+                st.session_state.target_query = st.session_state.search_input
             st.session_state.trigger_search = False
         
         st.markdown("""<div class="style-box"><b>🔍 분석 모드 가이드</b><br>• <b>단기 스윙</b>: 최근 6개월 일봉 파동 파악.<br>• <b>중장기 대세</b>: 최근 2년 주봉 대세 판별.</div>""", unsafe_allow_html=True)
@@ -486,7 +494,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                         "OBV 누적": "**OBV**\n\n세력 매집 판단 지표입니다.",
                         "RSI 강도": "**RSI**\n\n과열/침체를 수치화한 지표 (70이상 과매수, 30이하 과매도).",
                         "MACD 흐름": "**MACD**\n\n이평선의 차이를 이용해 추세 방향 파악.",
-                        "ATR 변동성": "**ATR**\n\n실질적인 주가 변동폭 평균."
+                        "ATR 변성": "**ATR**\n\n실질적인 주가 변동폭 평균."
                     }
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                         c1, c2 = st.columns([0.25, 0.75])
