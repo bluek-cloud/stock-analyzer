@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # ==========================================
-# 1. 페이지 설정 및 세션 관리 (상태 꼬임 무한루프 버그 패치)
+# 1. 페이지 설정 및 세션 관리 (상태 꼬임 버그 완벽 패치)
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
@@ -40,13 +40,13 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 🌟 최근 검색어 선택 시 입력 폼 버퍼까지 완벽 동기화하여 레이스 컨디션 차단
+# 최근 검색어 선택 시 입력 폼 버퍼까지 완벽 동기화하여 레이스 컨디션 차단
 def on_recent_click(query):
     st.session_state.target_query = query
     st.session_state.search_input = query
     st.session_state.trigger_search = True
 
-# 🌟 엔터키 및 유저 직접 입력 시 독립적으로 데이터 흐름을 제어하는 콜백 함수
+# 엔터키 및 유저 직접 입력 시 독립적으로 데이터 흐름을 제어하는 콜백 함수
 def on_search_input_change():
     if st.session_state.search_input:
         st.session_state.target_query = st.session_state.search_input
@@ -426,7 +426,7 @@ if app_menu == "📊 단일 종목 심층 분석":
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
         
-        # 🌟 네이티브 핸들러 바인딩으로 레이스 컨디션의 근본 원인을 제거
+        # 네이티브 핸들러 바인딩으로 레이스 컨디션의 근본 원인을 제거
         new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
         
         if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
@@ -470,7 +470,6 @@ if app_menu == "📊 단일 종목 심층 분석":
             st.subheader(f"📑 {display_name} 리포트")
             st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
 
-            box_pos = 100
             q_score = calculate_quant_score(chart_df, is_short_term)
             st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
             st.progress(q_score / 100)
