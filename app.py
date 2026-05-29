@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # ==========================================
-# 1. 페이지 설정 및 세션 관리
+# 1. 페이지 설정 및 세션 관리 (상태 꼬임 무한루프 버그 패치)
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
@@ -40,32 +40,31 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# 🌟 최근 검색어 선택 시 입력 폼 버퍼까지 완벽 동기화하여 레이스 컨디션 차단
 def on_recent_click(query):
     st.session_state.target_query = query
     st.session_state.search_input = query
     st.session_state.trigger_search = True
 
+# 🌟 엔터키 및 유저 직접 입력 시 독립적으로 데이터 흐름을 제어하는 콜백 함수
 def on_search_input_change():
     if st.session_state.search_input:
         st.session_state.target_query = st.session_state.search_input
 
 # ==========================================
-# 2. 공통 데이터 처리 함수 (Try-Except 방어막 적용)
+# 2. 공통 데이터 처리 함수 (외풍 방어막 유지)
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_krx_data():
     try:
-        # 🌟 외부 KRX 서버 정상 작동 시 크롤링 데이터 반환
         return fdr.StockListing('KRX')
-    except Exception as e:
-        # 🌟 KRX 서버 점검/차단 발생 시 빈 데이터프레임을 안전하게 반환하여 크래시 방지
+    except Exception:
         return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap'])
 
 def parse_query(query):
     query = query.strip().upper()
     krx_df = get_krx_data()
     
-    # KRX 서버 에러 상황이 아닐 때만 매칭 시도
     if not krx_df.empty:
         if query.isdigit() and len(query) == 6:
             matched = krx_df[krx_df['Code'] == query]
@@ -76,7 +75,6 @@ def parse_query(query):
             code = matched.iloc[0]['Code']
             return f"{query} ({code})", code, query, "원", 0
             
-    # KRX 리스트 획득 실패 시 혹은 해외 주식/코드 입력 시 예외 처리 분기
     if query.isdigit() and len(query) == 6:
         return f"국내 종목 ({query})", query, query, "원", 0
     return f"{query} (해외)", query, query, "$", 2
@@ -89,7 +87,7 @@ def get_stock_data(code, days=1825):
         if df.empty: return pd.DataFrame()
         if df.index.tz is not None: df.index = df.index.tz_localize(None)
         return df
-    except: return pd.DataFrame()
+    except Exception: return pd.DataFrame()
 
 def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
@@ -271,7 +269,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         comments['RSI'] = f"RSI({rsi:.1f}): 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다."
     elif regime == "약세 추세":
-        comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머뭅니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나, 지속적인 하락 압력을 받고 있으므로 섣부른 진입은 피해야 합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
+        comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머눕니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나, 지속적인 하락 압력을 받고 있으므로 섣부른 진입은 피해야 합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다."
     elif regime == "변동성 폭발":
         comments['RSI'] = f"RSI({rsi:.1f}): 변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다."
@@ -409,7 +407,7 @@ def scan_200_pullback(top_n=200):
                 '현재가': int(latest['Close']),
                 '200일선': int(latest['MA200'])
             })
-        except:
+        except Exception:
             pass
             
     progress_bar.empty()
@@ -428,6 +426,7 @@ if app_menu == "📊 단일 종목 심층 분석":
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
         
+        # 🌟 네이티브 핸들러 바인딩으로 레이스 컨디션의 근본 원인을 제거
         new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
         
         if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
@@ -471,6 +470,7 @@ if app_menu == "📊 단일 종목 심층 분석":
             st.subheader(f"📑 {display_name} 리포트")
             st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
 
+            box_pos = 100
             q_score = calculate_quant_score(chart_df, is_short_term)
             st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
             st.progress(q_score / 100)
