@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 finance-datareader
+pip install -U finance-datareader
