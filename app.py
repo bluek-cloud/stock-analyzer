@@ -297,8 +297,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             elif rsi >= 75: pos, strategy = "🔵 분할 익절", "안정적 추세나 단기 과열권에 진입했습니다. 수익 보호를 위해 보유 비중 분할 실현을 권장합니다."
             else: pos, strategy = "🟠 추세 보유 (홀딩)", "우상향 흐름 진행 중. 상승 추세 이탈 전까지 지속 보유하여 수익을 극대화하십시오."
         elif regime == "약세 추세":
+            # 🌟 버그 패치: 공백 결합 오타(simple_prev_obvand -> simple_prev_obv and) 완벽 교정
             if rsi >= 45 and close > prev['Close']:
-                if obv > simple_prev_obvand vol_ratio > 100: pos, strategy = "🟠 의미 있는 반등 시도", "하락장 속 유의미한 수급/거래량 동반 반등. 추세 전환의 단초가 될 수 있습니다."
+                if obv > simple_prev_obv and vol_ratio > 100: pos, strategy = "🟠 의미 있는 반등 시도", "하락장 속 유의미한 수급/거래량 동반 반등. 추세 전환의 단초가 될 수 있습니다."
                 else: pos, strategy = "🔵 데드캣 바운스 경계 (매도)", "수급 뒷받침이 부족한 단순 기술적 반등(속임수)일 확률이 높습니다. 탈출 기회로 삼으십시오."
             elif rsi <= 30 or bullish_div: pos, strategy = "🟠 단기 기술적 반등 공략", "극단적 과매도 및 다이버전스 발생. 짧은 수익을 목표로 한 기술적 반등 매매만 권장합니다."
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 물타기를 자제하고 현금 비중을 높여 관망하십시오."
@@ -434,7 +435,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                 st.session_state.target_query = st.session_state.search_input
             st.session_state.trigger_search = False
         
-        st.markdown(\"\"\"<div class="style-box"><b>🔍 분석 모드 가이드</b><br>• <b>단기 스윙</b>: 최근 6개월 일봉 파동 파악.<br>• <b>중장기 대세</b>: 최근 2년 주봉 대세 판별.</div>\"\"\", unsafe_allow_html=True)
+        st.markdown("""<div class="style-box"><b>🔍 분석 모드 가이드</b><br>• <b>단기 스윙</b>: 최근 6개월 일봉 파동 파악.<br>• <b>중장기 대세</b>: 최근 2년 주봉 대세 판별.</div>""", unsafe_allow_html=True)
         st.divider()
         st.subheader("🕒 최근 검색")
         for idx, item in enumerate(st.session_state.recent_searches):
@@ -454,7 +455,7 @@ if app_menu == "📊 단일 종목 심층 분석":
             is_short_term = "단기" in analyze_mode
             time_unit = "일" if is_short_term else "주"
             chart_df_daily = calculate_indicators(raw_df.copy())
-            weekly_raw = raw_df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            weekly_raw = raw_df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
             chart_df_weekly = calculate_indicators(weekly_raw)
             
             weekly_bullish = None
@@ -483,13 +484,13 @@ if app_menu == "📊 단일 종목 심층 분석":
                 with col1:
                     with st.container(border=True):
                         st.markdown("### 🎯 **종합 전략**")
-                        st.warning(f"**포지션:** {pos}\\n\\n**의견:** {strat}")
+                        st.warning(f"**포지션:** {pos}\n\n**의견:** {strat}")
                 with col2:
                     with st.container(border=True):
                         st.markdown("### 🔍 **차트 패턴 및 지지/저항 레벨**")
                         p_text = ", ".join(pts) if pts else "포착된 특이 패턴이 없습니다."
                         st.write(f"📍 **패턴:** {p_text}")
-                        md_currency_ui = currency.replace('$', r'\\$')
+                        md_currency_ui = currency.replace('$', r'\$')
                         sup_text = f"{sup:,.{decimals}f} {md_currency_ui}" if sup > 0 else "데이터 부족"
                         if res == 0: res_text = "✨ 신고가 돌파 (저항 없음)"
                         elif res > 0: res_text = f"{res:,.{decimals}f} {md_currency_ui}"
@@ -498,12 +499,12 @@ if app_menu == "📊 단일 종목 심층 분석":
 
                 with st.expander("🔬 지표별 상세 수치 분석 (용어를 클릭하시면 설명이 나타납니다)", expanded=True):
                     desc = {
-                        "ADX 추세강도": "**ADX**\\n\\n추세의 '파워' 자체를 측정합니다. 25 이상이면 강한 추세.",
-                        "상대 거래량": "**상대 거래량**\\n\\n최근 5일 평균 대비 현재 거래량의 비율입니다.",
-                        "OBV 누적": "**OBV**\\n\\n세력 매집 판단 지표입니다.",
-                        "RSI 강도": "**RSI**\\n\\n과열/침체를 수치화한 지표 (70이상 과매수, 30이하 과매도).",
-                        "MACD 흐름": "**MACD**\\n\\n이평선의 차이를 이용해 추세 방향 파악.",
-                        "ATR 변동성": "**ATR**\\n\\n실질적인 주가 변동폭 평균."
+                        "ADX 추세강도": "**ADX**\n\n추세의 '파워' 자체를 측정합니다. 25 이상이면 강한 추세.",
+                        "상대 거래량": "**상대 거래량**\n\n최근 5일 평균 대비 현재 거래량의 비율입니다.",
+                        "OBV 누적": "**OBV**\n\n세력 매집 판단 지표입니다.",
+                        "RSI 강도": "**RSI**\n\n과열/침체를 수치화한 지표 (70이상 과매수, 30이하 과매도).",
+                        "MACD 흐름": "**MACD**\n\n이평선의 차이를 이용해 추세 방향 파악.",
+                        "ATR 변동성": "**ATR**\n\n실질적인 주가 변동폭 평균."
                     }
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                         col_lbl, col_val = st.columns([0.25, 0.75])
@@ -531,9 +532,9 @@ if app_menu == "📊 단일 종목 심층 분석":
                     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], name=f'MA20', line=dict(color='orange', width=1)), row=1, col=1)
                     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA60'], name=f'MA60', line=dict(color='green', width=1)), row=1, col=1)
                     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
-                    fig.add_hline(y=70, line_dash=\"dash\", line_color=\"red\", line_width=1, row=2, col=1)
-                    fig.add_hline(y=30, line_dash=\"dash\", line_color=\"green\", line_width=1, row=2, col=1)
-                    fig.add_hrect(y0=30, y1=70, fillcolor=\"gray\", opacity=0.1, line_width=0, row=2, col=1)
+                    fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+                    fig.add_hline(y=30, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+                    fig.add_hrect(y0=30, y1=70, fillcolor="gray", opacity=0.1, line_width=0, row=2, col=1)
                     colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(plot_df['Close'], plot_df['Open'])]
                     fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
                     fig.update_layout(height=600, margin=dict(t=10, b=10, l=0, r=0), dragmode=False, hovermode='x unified', showlegend=False)
@@ -558,13 +559,13 @@ if app_menu == "📊 단일 종목 심층 분석":
 # ==========================================
 elif app_menu == "🎯 200일선 눌림목 포착 (NEW)":
     st.subheader("🎯 200일선 철벽 방어 우량주 스캐너")
-    st.markdown(\"\"\"
+    st.markdown("""
     **외국인과 기관이 방어하는 1등 주식의 '최후의 보루'를 찾아냅니다.**
     * **조건 A, B:** 상장폐지 위험 최소화 (시가총액 상위 우량주 스캔)
     * **조건 C:** 대세 상승장 확인 (200일선 10일 연속 상승)
     * **조건 E:** 정확한 지지 확인 (1봉전 저가가 200일선의 98% ~ 103% 이내)
     * **조건 G, H:** 완벽한 턴어라운드 타점 (오늘 양봉 & 종가 5일선 상향 돌파)
-    \"\"\")
+    """)
     
     scan_limit = st.selectbox("스캔 범위 설정 (시가총액 상위 기준)", [100, 200, 300], index=1, help="스캔 범위가 넓을수록 탐색 시간이 오래 걸립니다.")
     
@@ -586,7 +587,3 @@ elif app_menu == "🎯 200일선 눌림목 포착 (NEW)":
             else:
                 st.warning(f"⚠️ 현재 시가총액 상위 {scan_limit}개 종목 중, 200일선 눌림목 조건과 일치하는 종목이 없습니다.")
                 st.info("이 조건식은 매우 깐깐한 '안전 제일주의' 로직입니다. 포착된 종목이 없다는 것은 현재 주도 우량주 중 확실한 턴어라운드 지점에 온 종목이 없음을 의미합니다. 내일 다시 스캔해 보세요!")
-"""
-"""
-# If it runs fine here, it will compile perfectly.
-print("Full Script Validation Done.")
