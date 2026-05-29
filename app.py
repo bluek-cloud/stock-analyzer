@@ -52,7 +52,7 @@ def on_search_input_change():
         st.session_state.target_query = st.session_state.search_input
 
 # ==========================================
-# 2. 공통 데이터 처리 함수 (외풍 방어막 및 예외처리 적용)
+# 2. 공통 데이터 처리 함수 (외풍 방어막 및 가상 흑자 필터)
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_krx_data():
@@ -239,7 +239,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         t1, t2 = local_min_df.iloc[-2], local_min_df.iloc[-1]
         if t2['Close'] < t1['Close'] and (t2['OBV'] > t1['OBV'] or t2['RSI'] > t1['RSI']): bullish_div = True
 
-    # 🌟 국면 판단 논리 교정 (하이브 연속 하락 패턴 방어공식 이식)
+    # 🌟 국면 판단 논리 교정 공식 이식 (하이브 필터링 정상화)
     is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if len(df) > 120 else False
     if is_squeeze: regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
@@ -326,16 +326,23 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
     elif pos in sell_list and q_score > 70 and not is_falling_knife: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
 
+    # 🌟 이스케이프 정상화 개행 패치 (텍스트가 한 줄로 뭉개져 렌더링되던 현상 원천 제거)
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
-    ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n🔍 **[시장 국면 분류]**\n\n• 현재 해당 종목은 **[{regime}]** 국면에 위치해 있습니다.\n\n"
+    ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
+    ai_op += f"🔍 **[시장 국면 분류]**\n\n• 현재 해당 종목은 **[{regime}]** 국면에 위치해 있습니다.\n\n"
     
     if is_short_term and weekly_bullish is not None:
         ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
-        if regime in ["강세 추세", "상승 조정"]: ai_op += "• **장기 흐름:** 주봉(장기) 상승세가 굳건하여 일봉(단기) 수준에서도 강한 지지력을 보입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기는 긍정적이나 주봉(장기)은 하락 추세이므로 눈높이를 낮춰 대응하십시오.\n\n"
-        elif regime == "단기 약세 전환": ai_op += "• **장기 흐름:** 일봉상 단기 파동은 훼손되었으나, 주봉 기준 대세 상승선은 깨지지 않았습니다. 든든한 하단 지지 매물대 근처 진입 기회를 엿볼 수 있습니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 대세 시그널이 동시에 하방 압력을 호소하고 있으므로 대단히 보수적으로 방어해야 합니다.\n\n"
-        elif regime == "약세 추세": ai_op += "• **장기 흐름:** 단기는 부진하나 주봉(장기) 추세는 견고하여 중장기 관점에선 기회일 수 있습니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 모두 완전한 하락 추세(역배열)입니다. 보수적으로 접근하십시오.\n\n"
-        elif regime == "횡보 박스": ai_op += "• **장기 흐름:** 주봉(장기) 추세 상승 속 잠시 에너지를 비축하는 단기 횡보 국면입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 주봉(장기) 하락세 속에서 단기적으로 지지선을 형성하며 방어 중인 모습입니다.\n\n"
-        else: ai_op += "• **장기 흐름:** 장기 흐름에 동조화되어 에너지가 응축/분출되는 변곡점 구간입니다.\n\n"
+        if regime in ["강세 추세", "상승 조정"]: 
+            ai_op += "• **장기 흐름:** 주봉(장기) 상승세가 굳건하여 일봉(단기) 수준에서도 강한 지지력을 보입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기는 긍정적이나 주봉(장기)은 하락 추세이므로 눈높이를 낮춰 대응하십시오.\n\n"
+        elif regime == "단기 약세 전환":
+            ai_op += "• **장기 흐름:** 일봉상 단기 파동은 훼손되었으나, 주봉 기준 대세 상승선은 깨지지 않았습니다. 든든한 하단 지지 매물대 근처 진입 기회를 엿볼 수 있습니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 대세 시그널이 동시에 하방 압력을 호소하고 있으므로 대단히 보수적으로 방어해야 합니다.\n\n"
+        elif regime == "약세 추세": 
+            ai_op += "• **장기 흐름:** 단기는 부진하나 주봉(장기) 추세는 견고하여 중장기 관점에선 기회일 수 있습니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 모두 완전한 하락 추세(역배열)입니다. 보수적으로 접근하십시오.\n\n"
+        elif regime == "횡보 박스": 
+            ai_op += "• **장기 흐름:** 주봉(장기) 추세 상승 속 잠시 에너지를 비축하는 단기 횡보 국면입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 주봉(장기) 하락세 속에서 단기적으로 지지선을 형성하며 방어 중인 모습입니다.\n\n"
+        else: 
+            ai_op += "• **장기 흐름:** 장기 흐름에 동조화되어 에너지가 응축/분출되는 변곡점 구간입니다.\n\n"
     
     ai_op += f"💡 **[국면 맞춤형 통합 해석]**\n\n"
     if is_falling_knife: ai_op += "🚨 **[초고위험 투매 경보]** 현재 주가가 비정상적인 속도로 극심하게 급락 중인 '패닉셀' 구간입니다. 어떠한 기술적 반등 신호도 무시하고 철저히 관망할 것을 강력히 권고합니다.\n\n"
@@ -343,7 +350,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif regime == "에너지 응축 (스퀴즈)": ai_op += "• 변동성이 극도로 응축된 상태입니다. 곧 강한 방향성 분출이 예상됩니다.\n\n"
     elif regime == "횡보 박스":
         if box_pos <= 35: ai_op += f"• 하단 지지선({sup:,.{decimals}f}{md_currency}) 부근으로 단기 매수 매력도가 높습니다.\n\n"
-        elif box_pos >= 65 and res > 0:
+        elif box_pos >= 65 and res > 0: 
             if obv > simple_prev_obv: ai_op += f"• 현재 주가가 상단 저항선 부근에 위치했으나, 긍정적인 수급이 유입되고 있어 돌파 가능성을 예의주시할 필요가 있습니다.\n\n"
             else: ai_op += f"• 현재 주가가 상단 저항선 부근에 위치하여 단기 차익 실현 및 비중 축소를 고려해야 할 구간입니다.\n\n"
     elif regime == "강세 추세": ai_op += "• 매수세가 시장을 주도하는 강세장입니다. 추세 이탈 전까지 보유가 유리합니다.\n\n"
