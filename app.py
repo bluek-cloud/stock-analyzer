@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # ==========================================
-# 1. 페이지 설정 및 세션 관리 (모바일/엔터 초기화 버그 완벽 패치)
+# 1. 페이지 설정 및 세션 관리
 # ==========================================
 st.set_page_config(page_title="StockMap", layout="wide")
 
@@ -40,35 +40,45 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 🌟 최근 검색어 클릭 시 텍스트 입력창까지 완벽 동기화하여 레이스 컨디션 차단
 def on_recent_click(query):
     st.session_state.target_query = query
     st.session_state.search_input = query
     st.session_state.trigger_search = True
 
-# 🌟 엔터키 입력 시 독립적으로 타겟 쿼리를 갱신하는 텍스트 입력창 전용 콜백
 def on_search_input_change():
     if st.session_state.search_input:
         st.session_state.target_query = st.session_state.search_input
 
 # ==========================================
-# 2. 공통 데이터 처리 함수
+# 2. 공통 데이터 처리 함수 (Try-Except 방어막 적용)
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_krx_data():
-    return fdr.StockListing('KRX')
+    try:
+        # 🌟 외부 KRX 서버 정상 작동 시 크롤링 데이터 반환
+        return fdr.StockListing('KRX')
+    except Exception as e:
+        # 🌟 KRX 서버 점검/차단 발생 시 빈 데이터프레임을 안전하게 반환하여 크래시 방지
+        return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap'])
 
 def parse_query(query):
     query = query.strip().upper()
     krx_df = get_krx_data()
-    if query.isdigit() and len(query) == 6:
-        matched = krx_df[krx_df['Code'] == query]
+    
+    # KRX 서버 에러 상황이 아닐 때만 매칭 시도
+    if not krx_df.empty:
+        if query.isdigit() and len(query) == 6:
+            matched = krx_df[krx_df['Code'] == query]
+            if not matched.empty:
+                return f"{matched.iloc[0]['Name']} ({query})", query, query, "원", 0
+        matched = krx_df[krx_df['Name'] == query]
         if not matched.empty:
-            return f"{matched.iloc[0]['Name']} ({query})", query, query, "원", 0
-    matched = krx_df[krx_df['Name'] == query]
-    if not matched.empty:
-        code = matched.iloc[0]['Code']
-        return f"{query} ({code})", code, query, "원", 0
+            code = matched.iloc[0]['Code']
+            return f"{query} ({code})", code, query, "원", 0
+            
+    # KRX 리스트 획득 실패 시 혹은 해외 주식/코드 입력 시 예외 처리 분기
+    if query.isdigit() and len(query) == 6:
+        return f"국내 종목 ({query})", query, query, "원", 0
     return f"{query} (해외)", query, query, "$", 2
 
 @st.cache_data(ttl=60)
@@ -360,6 +370,9 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 # ==========================================
 def scan_200_pullback(top_n=200):
     krx_df = get_krx_data()
+    if krx_df.empty:
+        return pd.DataFrame()
+        
     krx_df['Marcap'] = pd.to_numeric(krx_df['Marcap'], errors='coerce')
     target_stocks = krx_df.sort_values('Marcap', ascending=False).head(top_n)
     
@@ -405,8 +418,6 @@ def scan_200_pullback(top_n=200):
 # ==========================================
 # 4. 사이드바 및 메인 실행 UI (투트랙 메뉴 적용)
 # ==========================================
-st.title("📈 StockMap")
-
 with st.sidebar:
     st.header("📌 메뉴 선택")
     app_menu = st.radio("기능을 선택하세요", ["📊 단일 종목 심층 분석", "🎯 200일선 눌림목 포착 (NEW)"])
@@ -417,7 +428,6 @@ if app_menu == "📊 단일 종목 심층 분석":
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
         
-        # 🌟 엔터키 및 클릭 상태 교임 완벽 방지: 콜백과 네이티브 세션 연동
         new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
         
         if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
@@ -494,12 +504,12 @@ if app_menu == "📊 단일 종목 심층 분석":
                         "OBV 누적": "**OBV**\n\n세력 매집 판단 지표입니다.",
                         "RSI 강도": "**RSI**\n\n과열/침체를 수치화한 지표 (70이상 과매수, 30이하 과매도).",
                         "MACD 흐름": "**MACD**\n\n이평선의 차이를 이용해 추세 방향 파악.",
-                        "ATR 변성": "**ATR**\n\n실질적인 주가 변동폭 평균."
+                        "ATR 변동성": "**ATR**\n\n실질적인 주가 변동폭 평균."
                     }
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
-                        c1, c2 = st.columns([0.25, 0.75])
-                        with c1.popover(label, use_container_width=True): st.info(desc.get(label))
-                        c2.markdown(comments.get(key, '데이터 없음'))
+                        col_lbl, col_val = st.columns([0.25, 0.75])
+                        with col_lbl.popover(label, use_container_width=True): st.info(desc.get(label))
+                        col_val.markdown(comments.get(key, '데이터 없음'))
                     st.divider()
                     st.info(comments.get('AI'))
 
@@ -560,16 +570,20 @@ elif app_menu == "🎯 200일선 눌림목 포착 (NEW)":
     scan_limit = st.selectbox("스캔 범위 설정 (시가총액 상위 기준)", [100, 200, 300], index=1, help="스캔 범위가 넓을수록 탐색 시간이 오래 걸립니다.")
     
     if st.button("🚀 스캐너 작동 (우량주 조건 탐색)", type="primary", use_container_width=True):
-        result_df = scan_200_pullback(top_n=scan_limit)
-        
-        st.divider()
-        if not result_df.empty:
-            st.success(f"🎉 축하합니다! 완벽한 눌림목 타점 종목 {len(result_df)}개를 포착했습니다.")
-            result_df['현재가'] = result_df['현재가'].apply(lambda x: f"{x:,} 원")
-            result_df['200일선'] = result_df['200일선'].apply(lambda x: f"{x:,} 원")
-            
-            st.dataframe(result_df, use_container_width=True, hide_index=True)
-            st.info("💡 위 종목 코드를 복사하여 좌측 메뉴의 **[단일 종목 심층 분석]**에서 상세 전략을 확인해 보세요!")
+        krx_check = get_krx_data()
+        if krx_check.empty:
+            st.error("⚠️ 한국거래소(KRX) 서버 통신 지연으로 실시간 스캔을 시작할 수 없습니다. 잠시 후 다시 시도해 주세요.")
         else:
-            st.warning(f"⚠️ 현재 시가총액 상위 {scan_limit}개 종목 중, 200일선 눌림목 조건과 일치하는 종목이 없습니다.")
-            st.info("이 조건식은 매우 깐깐한 '안전 제일주의' 로직입니다. 포착된 종목이 없다는 것은 현재 주도 우량주 중 확실한 턴어라운드 지점에 온 종목이 없음을 의미합니다. 내일 다시 스캔해 보세요!")
+            result_df = scan_200_pullback(top_n=scan_limit)
+            
+            st.divider()
+            if not result_df.empty:
+                st.success(f"🎉 축하합니다! 완벽한 눌림목 타점 종목 {len(result_df)}개를 포착했습니다.")
+                result_df['현재가'] = result_df['현재가'].apply(lambda x: f"{x:,} 원")
+                result_df['200일선'] = result_df['200일선'].apply(lambda x: f"{x:,} 원")
+                
+                st.dataframe(result_df, use_container_width=True, hide_index=True)
+                st.info("💡 위 종목 코드를 복사하여 좌측 메뉴의 **[단일 종목 심층 분석]**에서 상세 전략을 확인해 보세요!")
+            else:
+                st.warning(f"⚠️ 현재 시가총액 상위 {scan_limit}개 종목 중, 200일선 눌림목 조건과 일치하는 종목이 없습니다.")
+                st.info("이 조건식은 매우 깐깐한 '안전 제일주의' 로직입니다. 포착된 종목이 없다는 것은 현재 주도 우량주 중 확실한 턴어라운드 지점에 온 종목이 없음을 의미합니다. 내일 다시 스캔해 보세요!")
