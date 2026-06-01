@@ -20,6 +20,7 @@ if 'trigger_search' not in st.session_state:
 if 'search_input' not in st.session_state:
     st.session_state.search_input = ""
 
+# 🌟 모바일 및 데스크톱 가독성 향상을 위해 글자 포인트 및 줄간격 스케일업 반영
 st.markdown("""
     <style>
     .reportview-container .main .block-container { padding-top: 1rem; }
@@ -32,10 +33,15 @@ st.markdown("""
         padding: 12px;
         border-radius: 8px;
         margin-top: 10px;
-        font-size: 0.85rem;
-        line-height: 1.5;
+        font-size: 0.95rem;
+        line-height: 1.6;
         background-color: rgba(255, 165, 0, 0.05);
         border-left: 4px solid #FF8C00;
+    }
+    /* 분석의견 등 마크다운 내 본문/리스트 글자 포인트 확대 적용 */
+    [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {
+        font-size: 1.05rem !important;
+        line-height: 1.6 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -239,7 +245,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         t1, t2 = local_min_df.iloc[-2], local_min_df.iloc[-1]
         if t2['Close'] < t1['Close'] and (t2['OBV'] > t1['OBV'] or t2['RSI'] > t1['RSI']): bullish_div = True
 
-    # 🌟 국면 판단 논리 교정 공식 이식 (하이브 필터링 정상화)
+    # 🌟 국면 판단 논리 교정 공식 이식 (하이브 연속 하락 패턴 방어공식 이식)
     is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if len(df) > 120 else False
     if is_squeeze: regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
@@ -315,18 +321,12 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     else:
         if regime == "상승 조정" and (box_pos > 50 or obv < simple_prev_obv): pos, strategy = "⚖️ 장기 눌림목 대기", "장기 상승장 내 조정 구간이나, 하락세 진정 및 지지선 확인 전까지 보수적 관망을 권장합니다."
         elif regime == "단기 약세 전환": pos, strategy = "⚖️ 장기 지지선 테스트", "장기 상승추세의 이평 정배열 마지노선인 60일선 지지력을 시험하는 구간입니다. 보수적 진입을 권장합니다."
-        elif regime in ["강세 추세", "변동성 폭발", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했습니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
+        elif regime iN ["강세 추세", "변동성 폭발", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했습니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
         elif regime == "약세 추세" and rsi < 30: pos, strategy = "🟠 저점 분할 매집", "역사적 저평가 구간 진입. 펀더멘털 확인 후 긴 호흡으로 1차 분할 매집을 고려할 수 있습니다."
         elif regime == "약세 추세": pos, strategy = "🔷 비중 축소 (장기)", "대세 하락장이 지속 중입니다. 포트폴리오 방어를 위해 주식 비중 축소를 권장합니다."
         else: pos, strategy = "⚖️ 장기 관망", "장기 추세의 변곡점이거나 방향성이 불분명한 구간입니다. 확실한 추세 형성 시까지 관망하십시오."
 
-    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)"}
-    sell_list = {"🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)", "🔷 투매 진행 중 (절대 관망)", "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "⚖️ 돌파 탐색 (관망/분할매도)"}
-    
-    if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
-    elif pos in sell_list and q_score > 70 and not is_falling_knife: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
-
-    # 🌟 이스케이프 정상화 개행 패치 (텍스트가 한 줄로 뭉개져 렌더링되던 현상 원천 제거)
+    # 🌟 이스케이프가 중복 처리되지 않도록 마크다운 표준 문법 정렬 (줄바꿈 원상 복구)
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
     ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
     ai_op += f"🔍 **[시장 국면 분류]**\n\n• 현재 해당 종목은 **[{regime}]** 국면에 위치해 있습니다.\n\n"
@@ -435,7 +435,8 @@ def scan_200_pullback(top_n=200):
 # ==========================================
 with st.sidebar:
     st.header("📌 메뉴 선택")
-    app_menu = st.radio("기능을 선택하세요", ["📊 단일 종목 심층 분석", "🎯 200일선 눌림목 포착 (NEW)"])
+    # 🌟 요구사항 반영: ' (NEW)' 텍스트 완벽 제거 및 스캐너 독립 탑재
+    app_menu = st.radio("기능을 선택하세요", ["📊 단일 종목 심층 분석", "🎯 200일선 눌림목 포착"])
     st.divider()
 
 if app_menu == "📊 단일 종목 심층 분석":
@@ -443,7 +444,6 @@ if app_menu == "📊 단일 종목 심층 분석":
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
         
-        # 네이티브 핸들러 바인딩으로 레이스 컨디션의 근본 원인을 제거
         new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
         
         if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
@@ -573,7 +573,7 @@ if app_menu == "📊 단일 종목 심층 분석":
 # ==========================================
 # 5. 신규 메뉴: 200일선 눌림목 포착 스캐너
 # ==========================================
-elif app_menu == "🎯 200일선 눌림목 포착 (NEW)":
+elif app_menu == "🎯 200일선 눌림목 포착":
     st.subheader("🎯 200일선 철벽 방어 우량주 스캐너")
     st.markdown("""
     **외국인과 기관이 방어하는 1등 주식의 '최후의 보루'를 찾아냅니다.**
