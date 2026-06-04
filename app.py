@@ -224,16 +224,6 @@ def detect_patterns_and_levels(df):
 
     return patterns, support, resistance
 
-@st.cache_data(ttl=60)
-def get_stock_data(code):
-    start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
-    try:
-        df = fdr.DataReader(code, start=start_date)
-        if df.empty: return pd.DataFrame()
-        if df.index.tz is not None: df.index = df.index.tz_localize(None)
-        return df
-    except: return pd.DataFrame()
-
 def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish=None):
     md_currency = currency.replace('$', r'\$')
     latest, prev = df.iloc[-1], df.iloc[-2]
@@ -325,14 +315,29 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 물타기를 자제하고 현금 비중을 높여 관망하십시오."
         else: pos, strategy = "🔴 돌파 추세 추종", "평균을 상회하는 대량 거래와 상방 돌파 발생. 새로운 추세 형성 초입으로 적극 추종이 유리합니다."
     else:
-        if regime == "상승 조정" and (box_pos > 50 or obv < simple_prev_obv): pos, strategy = "⚖️ 장기 눌림목 대기", "장기 상승장 내 조정 구간이나, 하락세 진정 및 지지선 확인 전까지 보수적 관망을 권장합니다."
-        elif regime in ["강세 추세", "변동성 폭발", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했습니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
+        if is_falling_knife:
+            pos, strategy = "🔷 장기 투매 진행 중 (절대 매수금지)", "주봉 기준 대량 거래를 동반한 장대음봉 폭락이 포착되었습니다. 추가 연쇄 하락 위험이 극도로 큽니다."
+        elif regime == "변동성 폭발":
+            if close > prev_candle_close: pos, strategy = "🔴 장기 대시세 분출 (비중 확대)", "장기 박스권을 상방으로 막대한 거래량과 함께 뚫어내는 대형 우상향 시작 타점입니다."
+            else: pos, strategy = "🔷 하방 변동성 폭발 (적극 관망)", "폭발적인 매도 자금 이탈과 함께 중장기 주요 구조선들을 연쇄적으로 이탈하는 초고위험 구간입니다."
+        elif regime == "상승 조정" and (box_pos > 50 or obv < simple_prev_obv): pos, strategy = "⚖️ 장기 눌림목 대기", "장기 상승장 내 조정 구간이나, 하락세 진정 및 지지선 확인 전까지 보수적 관망을 권장합니다."
+        elif regime in ["강세 추세", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했습니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
         elif regime == "약세 추세" and rsi < 30: pos, strategy = "🟠 저점 분할 매집", "역사적 저평가 구간 진입. 펀더멘털 확인 후 긴 호흡으로 1차 분할 매집을 고려할 수 있습니다."
         elif regime == "약세 추세": pos, strategy = "🔷 비중 축소 (장기)", "대세 하락장이 지속 중입니다. 포트폴리오 방어를 위해 주식 비중 축소를 권장합니다."
         else: pos, strategy = "⚖️ 장기 관망", "장기 추세의 변곡점이거나 방향성이 불분명한 구간입니다. 확실한 추세 형성 시까지 관망하십시오."
 
-    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)"}
-    sell_list = {"🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)", "🔷 투매 진행 중 (절대 관망)", "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "⚖️ 돌파 탐색 (관망/분할매도)"}
+    buy_list = {
+        "🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종",
+        "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🔴 장기 대시세 분출 (비중 확대)",
+        "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도",
+        "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)"
+    }
+    sell_list = {
+        "🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)",
+        "🔷 투매 진행 중 (절대 관망)", "🔷 장기 투매 진행 중 (절대 매수금지)",
+        "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "🔷 하방 변동성 폭발 (적극 관망)",
+        "⚖️ 돌파 탐색 (관망/분할매도)"
+    }
     
     if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
     elif pos in sell_list and q_score > 70 and not is_falling_knife: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
@@ -363,6 +368,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     elif regime == "강세 추세": ai_op += "• 매수세가 시장을 주도하는 강세장입니다. 추세 이탈 전까지 보유가 유리합니다.\n\n"
     elif regime == "상승 조정": ai_op += "• 상승 흐름 속 건전한 단기 조정(매물 소화)이 진행 중입니다.\n\n"
     elif regime == "약세 추세": ai_op += "• 하락 압력이 지배적이므로 철저한 현금 비중 관리와 보수적 접근이 필수입니다.\n\n"
+    elif regime == "변동성 폭발": ai_op += f"• {'상방 대량 거래 폭발 확인. 새로운 대시세의 시작일 수 있으나 추격 매수는 신중하게 접근하십시오.' if close > prev_candle_close else '하방 대량 매도세 폭발 확인. 추가 연쇄 하락 위험이 있으므로 절대 역추세 매수를 자제하십시오.'}\n\n"
     
     ai_op += f"📊 **[수급 및 주요 레벨]**\n\n"
     ai_op += f"• **세력 수급:** 누적 수급(OBV)이 꾸준히 {'유입되며 긍정적' if obv > simple_prev_obv else '이탈하며 부정적'}인 정황이 관찰됩니다.\n\n"
