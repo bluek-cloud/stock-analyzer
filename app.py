@@ -334,7 +334,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif regime == "약세 추세": pos, strategy = "🔷 비중 축소 (장기)", "대세 하락장이 지속 중입니다. 포트폴리오 방어를 위해 주식 비중 축소를 권장합니다."
         else: pos, strategy = "⚖️ 장기 관망", "장기 추세의 변곡점이거나 방향성이 불분명한 구간입니다. 확실한 추세 형성 시까지 관망하십시오."
 
-    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (HOLID)", "🔴 장기 대시세 분출 (비중 확대)"}
+    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)", "🔴 장기 대시세 분출 (비중 확대)"}
     sell_list = {"🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)", "🔷 투매 진행 중 (절대 관망)", "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "⚖️ 돌파 탐색 (관망/분할매도)", "🔷 장기 투매 진행 중 (절대 매수금지)", "🔷 하방 변동성 폭발 (적극 관망)"}
     
     if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
@@ -470,7 +470,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                         md_curr_ui = currency.replace('$', r'\$')
                         sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "데이터 부족"
                         res_txt = "✨ 신고가 (저항 없음)" if res == 0 else (f"{res:,.{decimals}f} {md_curr_ui}" if res > 0 else "데이터 부족")
-                        st.write(f"🛡️ **지지선:** {sup_txt} | 🚧 **저항선:** {res_text}")
+                        st.write(f"🛡️ **지지선:** {sup_txt} | 🚧 **저항선:** {res_txt}")
                 with st.expander("🔬 지표별 상세 분석", expanded=True):
                     desc = {"ADX 추세강도": "ADX: 추세 파워 측정.", "상대 거래량": "Relative Vol: 거래량 비율.", "OBV 누적": "OBV: 세력 매집 지표.", "RSI 강도": "RSI: 과열/침체 수치.", "MACD 흐름": "MACD: 추세 방향 파악.", "ATR 변동성": "ATR: 실질 변동폭."}
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
@@ -514,11 +514,3 @@ elif app_menu == "🎯 200일선 눌림목 포착":
             res_df['200일선'] = res_df['200일선'].apply(lambda x: f"{x:,} 원")
             st.dataframe(res_df, use_container_width=True, hide_index=True)
         else: st.warning("조건에 일치하는 종목이 없습니다.")
-'''
-import sys
-try:
-    compile(clean_code, "app.py", "exec")
-    print("ALL TESTS PASSED: SCRIPT RE-VERIFIED AS 100% SANE")
-except SyntaxError as e:
-    print(f"FAILED ON RE-VERIFY: {e}")
-}
