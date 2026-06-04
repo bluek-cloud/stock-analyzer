@@ -20,31 +20,30 @@ if 'trigger_search' not in st.session_state:
 if 'search_input' not in st.session_state:
     st.session_state.search_input = ""
 
-# 🌟 따옴표 파싱 에러(unterminated string) 완벽 차단 및 가독성 스케일업 CSS
-st.markdown(
-    "<style>\n"
-    ".reportview-container .main .block-container { padding-top: 1rem; }\n"
-    "[data-testid='stMetric'] { \n"
-    "    background-color: rgba(128, 128, 128, 0.1); \n"
-    "    padding: 10px; border-radius: 10px; \n"
-    "    border: 1px solid rgba(128, 128, 128, 0.2); \n"
-    "}\n"
-    ".style-box {\n"
-    "    padding: 12px;\n"
-    "    border-radius: 8px;\n"
-    "    margin-top: 10px;\n"
-    "    font-size: 0.95rem;\n"
-    "    line-height: 1.6;\n"
-    "    background-color: rgba(255, 165, 0, 0.05);\n"
-    "    border-left: 4px solid #FF8C00;\n"
-    "}\n"
-    "[data-testid='stMarkdownContainer'] p, [data-testid='stMarkdownContainer'] li {\n"
-    "    font-size: 1.05rem !important;\n"
-    "    line-height: 1.6 !important;\n"
-    "}\n"
-    "</style>",
-    unsafe_allow_html=True
-)
+# 모바일 및 데스크톱 가독성 확대를 위해 글자 포인트 스케일업 스타일 시트 적용
+st.markdown("""
+    <style>
+    .reportview-container .main .block-container { padding-top: 1rem; }
+    [data-testid="stMetric"] { 
+        background-color: rgba(128, 128, 128, 0.1); 
+        padding: 10px; border-radius: 10px; 
+        border: 1px solid rgba(128, 128, 128, 0.2); 
+    }
+    .style-box {
+        padding: 12px;
+        border-radius: 8px;
+        margin-top: 10px;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        background-color: rgba(255, 165, 0, 0.05);
+        border-left: 4px solid #FF8C00;
+    }
+    [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {
+        font-size: 1.05rem !important;
+        line-height: 1.6 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # 최근 검색어 선택 시 입력 폼 버퍼까지 완벽 동기화하여 레이스 컨디션 차단
 def on_recent_click(query):
@@ -178,7 +177,8 @@ def detect_patterns_and_levels(df):
     
     lookback = min(61, len(df))
     past_df = df.iloc[-lookback:-1] if lookback > 1 else df.iloc[:-1]
-    if past_df.empty: return patterns, latest['Close'] * 0.95, latest['Close'] * 1.05
+    if past_df.empty:
+        return patterns, latest['Close'] * 0.95, latest['Close'] * 1.05
     
     closes = past_df['Close']
     tolerance = closes.mean() * 0.02
@@ -194,7 +194,8 @@ def detect_patterns_and_levels(df):
                     c['center'] = sum(c['prices']) / len(c['prices'])
                     matched = True
                     break
-            if not matched: clusters.append({'center': p, 'prices': [p]})
+            if not matched:
+                clusters.append({'center': p, 'prices': [p]})
         clusters.sort(key=lambda x: len(x['prices']), reverse=True)
         return clusters
 
@@ -211,15 +212,27 @@ def detect_patterns_and_levels(df):
         support = below.min() if not below.empty else closes.min()
 
     above = closes[closes > latest['Close']] 
-    if above.empty: resistance = 0  
+    if above.empty:
+        resistance = 0  
     else:
         if len(resistance_candidates) >= 2:
             res_clusters = cluster_levels(resistance_candidates)
             valid_res = [c for c in res_clusters if c['center'] > latest['Close']]
             resistance = valid_res[0]['center'] if valid_res else above.max()
-        else: resistance = above.max()
+        else:
+            resistance = above.max()
 
     return patterns, support, resistance
+
+@st.cache_data(ttl=60)
+def get_stock_data(code):
+    start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
+    try:
+        df = fdr.DataReader(code, start=start_date)
+        if df.empty: return pd.DataFrame()
+        if df.index.tz is not None: df.index = df.index.tz_localize(None)
+        return df
+    except: return pd.DataFrame()
 
 def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish=None):
     md_currency = currency.replace('$', r'\$')
@@ -227,14 +240,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     close, rsi, obv, vol_ratio, atr = map(float, [latest['Close'], latest['RSI'], latest['OBV'], latest['Vol_Ratio'], latest['ATR']])
     ma20, ma60, adx, p_di, m_di = map(float, [latest['MA20'], latest['MA60'], latest['ADX'], latest['+DI'], latest['-DI']])
     
-    latest_open, latest_high, latest_low = float(latest['Open']), float(latest['High']), float(latest['Low'])
     prev_candle_close = float(prev['Close'])
     prev_ma20 = float(prev['MA20']) if not pd.isna(prev['MA20']) else ma20
-    body = abs(latest_open - close)
-    near_sup = abs(close - sup) / (sup + 1e-10) <= 0.03
     
     simple_lookback = min(5, len(df) - 1) if len(df) > 1 else 1
-    simple_prev_obv = float(df['OBV'].iloc[-simple_lookback])
+    long_lookback   = min(13, len(df) - 1) if len(df) > 1 else 1
+    obv_lookback    = simple_lookback if is_short_term else long_lookback
+    simple_prev_obv = float(df['OBV'].iloc[-obv_lookback])
     
     swing_lookback = min(60, len(df))
     past_df = df.iloc[-swing_lookback:]
@@ -245,15 +257,14 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     bullish_div = False
     if len(local_min_df) >= 2:
         t1, t2 = local_min_df.iloc[-2], local_min_df.iloc[-1]
-        if t2['Close'] < t1['Close'] and (t2['OBV'] > t1['OBV'] or t2['RSI'] > t1['RSI']): bullish_div = True
+        if t2['Close'] < t1['Close'] and (t2['OBV'] > t1['OBV'] or t2['RSI'] > t1['RSI']): 
+            bullish_div = True
 
     is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if len(df) > 120 else False
     if is_squeeze: regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
     elif adx < 25: regime = "횡보 박스"
-    elif ma20 >= ma60 and close >= ma60: 
-        if close >= ma20: regime = "강세 추세" if p_di > m_di else "상승 조정"
-        else: regime = "단기 약세 전환"
+    elif ma20 >= ma60 and close >= ma60: regime = "강세 추세" if p_di > m_di else "상승 조정"
     else: regime = "약세 추세"
 
     box_pos = (close - sup) / (res - sup) * 100 if res > sup else 100
@@ -267,29 +278,26 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     comments['ADX'] = f"현재 ADX 추세강도 지수는 **{adx:.1f}**이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
     
     if regime == "에너지 응축 (스퀴즈)":
-        comments['RSI'] = f"RSI({rsi:.1f}): 볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다."
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다."
+        comments['RSI'] = f"RSI({rsi:.1f}): 볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다."
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다. 폭풍 전야의 고요한 상태입니다."
     elif regime == "횡보 박스":
-        comments['RSI'] = f"RSI({rsi:.1f}): 횡보장에서는 RSI의 신뢰도가 가장 높습니다. " + ("박스권 하단 지지선 터치로 기술적 반등이 예상됩니다." if rsi <= 40 else "박스권 상단 저항선 도달로 조정이 예상됩니다." if rsi >= 60 else "박스권 중간에서 방향성을 탐색 중입니다.")
+        comments['RSI'] = f"RSI({rsi:.1f}): 횡보장에서는 RSI의 신뢰도가 가장 높습니다. " + ("박스권 하단 지지선(과매도) 터치로 기술적 반등이 예상됩니다." if rsi <= 40 else "박스권 상단 저항선(과매수) 도달로 조정이 예상됩니다." if rsi >= 60 else "박스권 중간에서 뚜렷한 방향성을 탐색 중입니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 뚜렷한 추세가 부재한 박스권이므로 MACD 크로스 신호의 신뢰도는 다소 떨어집니다."
     elif regime == "강세 추세":
-        comments['RSI'] = f"RSI({rsi:.1f}): 강세장에서는 지표가 쉽게 과열권에 진입합니다. " + ("강한 매수세로 단기 과열 상태이나 추세는 굳건합니다." if rsi >= 70 else "안정적인 상승 탄력을 유지하고 있습니다.")
+        comments['RSI'] = f"RSI({rsi:.1f}): 강세장에서는 지표가 쉽게 과열권에 진입합니다. " + ("강한 매수세로 단기 과열(70 이상) 상태이나 추세는 굳건합니다." if rsi >= 70 else "상승 추세 중 발생한 건전한 눌림목(조정) 타점입니다." if rsi <= 50 else "안정적인 상승 탄력을 유지하고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 상승 모멘텀이 강하게 유지되며 이평선 정배열 확장을 지지하고 있습니다."
     elif regime == "상승 조정": 
-        comments['RSI'] = f"RSI({rsi:.1f}): 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 지지선 확인이 필요합니다."
+        comments['RSI'] = f"RSI({rsi:.1f}): 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다."
-    elif regime == "단기 약세 전환":
-        comments['RSI'] = f"RSI({rsi:.1f}): 주가가 단기 지지선(20일선)을 이탈함에 따라 투심이 빠르게 냉각되고 있습니다."
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 지표가 시그널선을 하향 돌파한 뒤 단기 매도 압력이 가중되고 있습니다."
     elif regime == "약세 추세":
-        comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머눕니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나 섣부른 진입은 피해야 합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
+        comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머눕니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나, 지속적인 하락 압력을 받고 있으므로 섣부른 진입은 피해야 합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다."
     elif regime == "변동성 폭발":
         comments['RSI'] = f"RSI({rsi:.1f}): 변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기 모멘텀이 평소의 범위를 벗어나 급격하게 방향성을 분출하고 있습니다."
 
-    comments['VOL'] = f"상대 거래량이 평균 대비 **{vol_ratio:.0f}%** 수준입니다."
-    comments['OBV'] = f"최근 수급(OBV)이 **{'상승(자금 유입)' if obv > simple_prev_obv else '하락(자금 이탈)'}** 중입니다."
+    comments['VOL'] = f"상대 거래량이 평균 대비 **{vol_ratio:.0f}%** 수준입니다. " + ("대량 거래가 터지며 시장의 강한 이목이 집중되었습니다." if vol_ratio > 150 else "평이한 수준의 거래가 이뤄지고 있습니다.")
+    comments['OBV'] = f"최근 {obv_lookback}{time_unit}간 누적 수급(OBV)이 **{'상승(자금 유입)' if obv > simple_prev_obv else '하락(자금 이탈)'}** 중입니다."
     comments['ATR'] = f"예상되는 실질 변동폭(ATR)은 주당 평균 **{vol_pct:.1f}% ({atr:,.{decimals}f}{md_currency})** 수준입니다."
 
     if is_short_term:
@@ -309,9 +317,6 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             if rsi <= 55 or bullish_div: pos, strategy = "🔴 추세 눌림목 적극 매수", "강한 상승 추세 속 건전한 눌림목 발생. 확률 높은 매수 타점으로 평가됩니다."
             elif rsi >= 75: pos, strategy = "🔵 분할 익절", "안정적 추세나 단기 과열권에 진입했습니다. 수익 보호를 위해 보유 비중 분할 실현을 권장합니다."
             else: pos, strategy = "🟠 추세 보유 (홀딩)", "우상향 흐름 진행 중. 상승 추세 이탈 전까지 지속 보유하여 수익을 극대화하십시오."
-        elif regime == "단기 약세 전환":
-            if box_pos <= 35 or near_sup or bullish_div: pos, strategy = "🟠 단기 기술적 반등 공략", "단기 지지선은 깨졌으나 하방 구조적 지지선에 도달했습니다. 반등 신호를 노린 짧은 트레이딩이 가능합니다."
-            else: pos, strategy = "⚖️ 단기 관망", "주가가 20일선을 깨고 밀리고 있습니다. 확실한 바닥을 다질 때까지 관망하십시오."
         elif regime == "약세 추세":
             if rsi >= 45 and close > prev['Close']:
                 if obv > simple_prev_obv and vol_ratio > 100: pos, strategy = "🟠 의미 있는 반등 시도", "하락장 속 유의미한 수급/거래량 동반 반등. 추세 전환의 단초가 될 수 있습니다."
@@ -320,74 +325,71 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 물타기를 자제하고 현금 비중을 높여 관망하십시오."
         else: pos, strategy = "🔴 돌파 추세 추종", "평균을 상회하는 대량 거래와 상방 돌파 발생. 새로운 추세 형성 초입으로 적극 추종이 유리합니다."
     else:
-        if is_falling_knife: 
-            pos, strategy = "🔷 장기 투매 진행 중 (절대 매수금지)", "주봉 기준 대량 거래를 동반한 장대음봉 폭락이 포착되었습니다. 추가 연쇄 하락 위험이 극도로 큽니다."
-        elif regime == "상승 조정" and (box_pos > 50 or obv < simple_prev_obv): 
-            pos, strategy = "⚖️ 장기 눌림목 대기", "하락세 진정 및 지지선 확인 전까지 보수적 관망을 권장합니다."
-        elif regime == "단기 약세 전환": 
-            pos, strategy = "⚖️ 장기 지지선 테스트", "장기 상승추세의 이평 정배열 마지노선인 60일선 지지력을 시험하는 구간입니다. 관망하십시오."
-        elif regime == "변동성 폭발":
-            if close > prev_candle_close: pos, strategy = "🔴 장기 대시세 분출 (비중 확대)", "장기 박스권을 상방으로 막대한 거래량과 함께 뚫어내는 대형 우상향 시작 타점입니다."
-            else: pos, strategy = "🔷 하방 변동성 폭발 (적극 관망)", "폭발적인 매도 자금 이탈과 함께 중장기 주요 구조선들을 연쇄적으로 이탈하는 초고위험 구간입니다."
-        elif regime in ["강세 추세", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장입니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
+        if regime == "상승 조정" and (box_pos > 50 or obv < simple_prev_obv): pos, strategy = "⚖️ 장기 눌림목 대기", "장기 상승장 내 조정 구간이나, 하락세 진정 및 지지선 확인 전까지 보수적 관망을 권장합니다."
+        elif regime in ["강세 추세", "변동성 폭발", "상승 조정"]: pos, strategy = "🔴 비중 확대 (장기)", "대세 상승장에 진입했습니다. 장기적 시각에서 비중 확대 및 홀딩 전략이 유효합니다."
         elif regime == "약세 추세" and rsi < 30: pos, strategy = "🟠 저점 분할 매집", "역사적 저평가 구간 진입. 펀더멘털 확인 후 긴 호흡으로 1차 분할 매집을 고려할 수 있습니다."
         elif regime == "약세 추세": pos, strategy = "🔷 비중 축소 (장기)", "대세 하락장이 지속 중입니다. 포트폴리오 방어를 위해 주식 비중 축소를 권장합니다."
         else: pos, strategy = "⚖️ 장기 관망", "장기 추세의 변곡점이거나 방향성이 불분명한 구간입니다. 확실한 추세 형성 시까지 관망하십시오."
 
-    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)", "🔴 장기 대시세 분출 (비중 확대)"}
-    sell_list = {"🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)", "🔷 투매 진행 중 (절대 관망)", "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "⚖️ 돌파 탐색 (관망/분할매도)", "🔷 장기 투매 진행 중 (절대 매수금지)", "🔷 하방 변동성 폭발 (적극 관망)"}
+    buy_list = {"🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)"}
+    sell_list = {"🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)", "🔷 투매 진행 중 (절대 관망)", "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "⚖️ 돌파 탐색 (관망/분할매도)"}
     
     if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
     elif pos in sell_list and q_score > 70 and not is_falling_knife: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
 
-    # 🌟 텍스트 이중 파싱 오류를 제거하여 한 줄씩 예쁘게 출력되도록 정렬 완료
+    # 🌟 이중 이스케이프 제거: 한 줄씩 예쁘게 개행되도록 순수 \n\n으로 정렬
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
-    ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\\n\\n"
-    ai_op += f"🔍 **[시장 국면 분류]**\\n\\n• 현재 해당 종목은 **[{regime}]** 국면에 위치해 있습니다.\\n\\n"
+    ai_op = f"🤖 **StockMap AI {mode_str} 심층 진단 리포트**\n\n"
+    ai_op += f"🔍 **[시장 국면 분류]**\n\n• 현재 해당 종목은 **[{regime}]** 국면에 위치해 있습니다.\n\n"
     
     if is_short_term and weekly_bullish is not None:
-        ai_op += "⏱️ **[MTF 다중 시간대 분석]**\\n\\n"
+        ai_op += f"⏱️ **[MTF 다중 시간대 분석]**\n\n"
         if regime in ["강세 추세", "상승 조정"]: 
-            ai_op += "• **장기 흐름:** 주봉 상승세가 굳건하여 일봉 수준에서도 강한 지지력을 보입니다.\\n\\n" if weekly_bullish else "• **장기 흐름:** 단기는 긍정적이나 주봉은 하락 추세이므로 눈높이를 낮추십시오.\\n\\n"
-        elif regime == "단기 약세 전환":
-            ai_op += "• **장기 흐름:** 일봉상 단기 파동은 훼손되었으나 주봉 대세선은 깨지지 않았습니다.\\n\\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 대세 시그널이 동시에 하방 압력을 호소 중입니다.\\n\\n"
+            ai_op += "• **장기 흐름:** 주봉(장기) 상승세가 굳건하여 일봉(단기) 수준에서도 강한 지지력을 보입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기는 긍정적이나 주봉(장기)은 하락 추세이므로 눈높이를 낮춰 대응하십시오.\n\n"
         elif regime == "약세 추세": 
-            ai_op += "• **장기 흐름:** 단기는 부진하나 주봉(장기) 추세는 견고하여 중장기 관점에선 기회일 수 있습니다.\\n\\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 모두 완전한 하락 추세(역배열)입니다. 보수적으로 접근하십시오.\\n\\n"
+            ai_op += "• **장기 흐름:** 단기는 부진하나 주봉(장기) 추세는 견고하여 중장기 관점에선 기회일 수 있습니다.\n\n" if weekly_bullish else "• **장기 흐름:** 단기와 장기 모두 완전한 하락 추세(역배열)입니다. 보수적으로 접근하십시오.\n\n"
         elif regime == "횡보 박스": 
-            ai_op += "• **장기 흐름:** 주봉(장기) 추세 상승 속 잠시 에너지를 비축하는 단기 횡보 국면입니다.\\n\\n" if weekly_bullish else "• **장기 흐름:** 주봉(장기) 하락세 속에서 단기적으로 지지선을 형성하며 추가 하락을 방어하려는 모습이 관찰됩니다.\\n\\n"
+            ai_op += "• **장기 흐름:** 주봉(장기) 추세 상승 속 잠시 에너지를 비축하는 단기 횡보 국면입니다.\n\n" if weekly_bullish else "• **장기 흐름:** 주봉(장기) 하락세 속에서 단기적으로 지지선을 형성하며 방어 중인 모습입니다.\n\n"
         else: 
-            ai_op += "• **장기 흐름:** 장기 흐름에 동조화되어 에너지가 응축/분출되는 구간입니다.\\n\\n"
+            ai_op += "• **장기 흐름:** 장기 흐름에 동조화되어 에너지가 응축/분출되는 변곡점 구간입니다.\n\n"
     
-    ai_op += "💡 **[국면 맞춤형 통합 해석]**\\n\\n"
-    if is_falling_knife: ai_op += "🚨 **[초고위험 투매 경보]** 현재 주가가 비정상적으로 급락 중인 '패닉셀' 구간입니다. 철저히 관망하십시오.\\n\\n"
-    elif res == 0: ai_op += "✨ **[신고가 랠리 분석]** 완벽한 신고가 영역에 진입했습니다. 강력한 추세가 이어질 확률이 높습니다.\\n\\n"
-    elif regime == "단기 약세 전환": ai_op += "• 생명선(20일선)이 무너지며 위험 단기 조정에 진입했습니다. 무조건적인 매수보단 관망 시점입니다.\\n\\n"
-    elif regime == "강세 추세": ai_op += "• 매수세가 주도하는 강세장입니다. 추세 이탈 전까지 보유가 유리합니다.\\n\\n"
-    elif regime == "상승 조정": ai_op += "• 상승 흐름 속 건전한 단기 조정(매물 소화)이 진행 중입니다.\\n\\n"
-    elif regime == "약세 추세": ai_op += "• 하락 압력이 지배적이므로 철저한 현금 비중 관리와 보수적 접근이 필수입니다.\\n\\n"
-    else: ai_op += f"• 현재 시장의 파동 에너지 분석 결과, **[{regime}]** 국면에 맞춘 전략적 대응이 필수적인 자리에 위치해 있습니다.\\n\\n"
+    ai_op += "💡 **[국면 맞춤형 통합 해석]**\n\n"
+    if is_falling_knife: ai_op += "🚨 **[초고위험 투매 경보]** 현재 주가가 비정상적인 속도로 극심하게 급락 중인 '패닉셀' 구간입니다. 어떠한 기술적 반등 신호도 무시하고 철저히 관망할 것을 강력히 권고합니다.\n\n"
+    elif res == 0: ai_op += "✨ **[신고가 랠리 분석]** 과거의 모든 악성 매물대를 소화하고 완벽한 신고가(상방 열림) 영역에 진입했습니다. 강력한 추세가 이어질 확률이 높습니다.\n\n"
+    elif regime == "에너지 응축 (스퀴즈)": ai_op += "• 변동성이 극도로 응축된 상태입니다. 곧 강한 방향성 분출이 예상됩니다.\n\n"
+    elif regime == "횡보 박스":
+        if box_pos <= 35: ai_op += f"• 하단 지지선({sup:,.{decimals}f}{md_currency}) 부근으로 단기 매수 매력도가 높습니다.\n\n"
+        elif box_pos >= 65: ai_op += f"• 상단 저항선({res:,.{decimals}f}{md_currency}) 부근으로 리스크 관리가 필요한 구간입니다.\n\n"
+    elif regime == "강세 추세": ai_op += "• 매수세가 시장을 주도하는 강세장입니다. 추세 이탈 전까지 보유가 유리합니다.\n\n"
+    elif regime == "상승 조정": ai_op += "• 상승 흐름 속 건전한 단기 조정(매물 소화)이 진행 중입니다.\n\n"
+    elif regime == "약세 추세": ai_op += "• 하락 압력이 지배적이므로 철저한 현금 비중 관리와 보수적 접근이 필수입니다.\n\n"
     
-    ai_op += "📊 **[수급 및 주요 레벨]**\\n\\n"
-    ai_op += f"• **세력 수급:** 누적 수급(OBV)이 꾸준히 {'유입되며 긍정적 물량 매집 정황' if obv > simple_prev_obv else '이탈하며 부정적 분산 흐름'}이 관찰됩니다.\\n\\n"
+    ai_op += f"📊 **[수급 및 주요 레벨]**\n\n"
+    ai_op += f"• **세력 수급:** 누적 수급(OBV)이 꾸준히 {'유입되며 긍정적' if obv > simple_prev_obv else '이탈하며 부정적'}인 정황이 관찰됩니다.\n\n"
     
+    latest_open, latest_high, latest_low = float(latest['Open']), float(latest['High']), float(latest['Low'])
+    body = abs(latest_open - close)
     if close > prev_candle_close and close > ma20 and prev_candle_close <= prev_ma20 and not is_falling_knife:
         if vol_ratio < 80 or (latest_high - max(latest_open, close)) > body * 1.5:
-            ai_op += "🚨 **[가짜 상승(Bull Trap) 주의]** 저항 돌파 거래량이 부족하거나 윗꼬리가 깁니다. 추격 매수를 자제하십시오.\\n\\n"
+            ai_op += "🚨 **[가짜 상승(Bull Trap) 주의]** 저항을 돌파했으나 거래량이 부진하거나 윗꼬리가 깁니다. 섣부른 추격 매수를 자제하십시오.\n\n"
     elif close < prev_candle_close and close < ma20 and prev_candle_close >= prev_ma20:
         if vol_ratio < 70 or (min(latest_open, close) - latest_low) > body * 1.5:
-            ai_op += "🚨 **[가짜 하락(Bear Trap) 주의]** 지지를 이탈했으나 하단 방어 흔적이 보입니다. 일시적 충격일 수 있습니다.\\n\\n"
+            ai_op += "🚨 **[가짜 하락(Bear Trap) 주의]** 지지를 이탈했으나 하락 물량 방어 흔적(아랫꼬리)이 보입니다. 일시적 충격일 수 있습니다.\n\n"
 
-    ai_op += "📅 **[단기 실전 대응 시나리오 가이드]**\\n\\n"
-    if res == 0: ai_op += "• **상방 추세 시나리오:** 저항 없는 신고가 상태입니다. 추세 훼손 전까지 수익 극대화.\\n\\n"
-    else: ai_op += f"• **상방 돌파 시나리오:** 1차 저항선인 **{res:,.{decimals}f}{md_currency}** 강하게 돌파 시 매수 관점 접근.\\n\\n"
-    ai_op += f"• **하방 방어 시나리오:** 핵심 지지선은 **{sup:,.{decimals}f}{md_currency}** 입니다. 이탈 시 즉각 리스크 관리.\\n\\n"
+    ai_op += "📅 **[단기 실전 대응 시나리오 가이드]**\n\n"
+    if res == 0: ai_op += "• **상방 추세 시나리오:** 저항 없는 신고가 상태입니다. 추세 꺾임 시까지 수익 극대화 관점.\n\n"
+    else: ai_op += f"• **상방 돌파 시나리오:** 1차 저항선인 **{res:,.{decimals}f}{md_currency}** 강하게 돌파 시 새로운 상승 추세로 판단, 매수 관점 접근.\n\n"
+    ai_op += f"• **하방 방어 시나리오:** 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근, 핵심 지지선은 **{sup:,.{decimals}f}{md_currency}** 입니다. 이탈 시 즉각적 리스크 관리 우선.\n\n"
 
     if bullish_div and regime != "약세 추세" and not is_falling_knife: 
-        ai_op += "🔥 **[특급 패턴: 상승 다이버전스 포착]** 최근 주가의 저점 파동은 낮아졌으나 지표의 바닥은 높아지는 반전 유도형 다이버전스가 관찰됩니다.\\n\\n"
+        ai_op += "🔥 **[상승 다이버전스 포착]** 보조지표의 저점이 상승하는 긍정적 반전 시그널이 확인되었습니다!\n\n"
 
     comments['AI'] = f"{ai_op}🎯 **최종 투자 전략 요약:** {strategy} (AI 권장 포지션: **{pos}**)"
     return pos, strategy, comments
 
+# ==========================================
+# 3. 신규 스캐너 함수 (200일선 눌림목)
+# ==========================================
 def scan_200_pullback(top_n=200):
     krx_df = get_krx_data()
     if krx_df.empty: return pd.DataFrame()
@@ -471,7 +473,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                 with c1:
                     with st.container(border=True):
                         st.markdown("### 🎯 **종합 전략**")
-                        st.warning(f"**포지션:** {pos}\\n\\n**의견:** {strat}")
+                        st.warning(f"**포지션:** {pos}\n\n**의견:** {strat}")
                 with c2:
                     with st.container(border=True):
                         st.markdown("### 🔍 **지지/저항 레벨**")
