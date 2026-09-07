@@ -5,6 +5,7 @@ from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
 # 1. 페이지 설정 및 세션 관리 (상태 꼬임 무한루프 버그 패치)
@@ -90,7 +91,11 @@ def get_stock_data(code, days=1825):
     try:
         df = fdr.DataReader(code, start=start_date)
         if df.empty: return pd.DataFrame()
-        if df.index.tz is not None: df.index = df.index.tz_localize(None)
+        if df.index.tz is not None:
+            try:
+                df.index = df.index.tz_convert(None)
+            except Exception:
+                df.index = df.index.tz_localize(None)
         return df
     except Exception: return pd.DataFrame()
 
@@ -127,7 +132,8 @@ def calculate_indicators(df):
     direction = np.sign(delta).fillna(0) 
     df['OBV'] = (df['Volume'] * direction).cumsum()
     df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
-    df['Vol_Ratio'] = (df['Volume'] / (df['Vol_MA5'] + 1e-10)) * 100
+    vol_ma5_prev = df['Volume'].shift(1).rolling(window=5).mean()
+    df['Vol_Ratio'] = (df['Volume'] / (vol_ma5_prev.fillna(df['Vol_MA5']) + 1e-10)) * 100
     
     high_diff, low_diff = df['High'].diff(), -df['Low'].diff()
     plus_dm = pd.Series(np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0), index=df.index).ewm(alpha=1/14, adjust=False).mean()
@@ -144,9 +150,12 @@ def calculate_quant_score(df, is_short_term):
     score = 0
     if is_short_term:
         if not pd.isna(latest['RSI']):
-            if latest['RSI'] < 30: score += 25
-            elif latest['RSI'] < 50: score += 15
-            elif latest['RSI'] < 70: score += 5
+            rsi_val = latest['RSI']
+            if 50 <= rsi_val <= 68: score += 25  # 건강한 상승 모멘텀 유지 구간
+            elif rsi_val < 35 and latest['Close'] > prev['Close']: score += 25  # 과매도권 양봉 반등 확인 (역발상 타점)
+            elif 35 <= rsi_val < 50 and latest['Close'] > prev['Close']: score += 15  # 눌림목 반등 시도
+            elif rsi_val < 35: score += 5  # 과매도이나 지속 음봉 하락 중 (떨어지는 칼날 위험)
+            else: score += 10  # 과열권(RSI > 68) 추세 유지
         if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']):
             if latest['MACD'] > latest['Signal']: score += 25
         obv_ref_short = df['OBV'].iloc[-min(5, len(df)-1)]
@@ -168,25 +177,46 @@ def calculate_quant_score(df, is_short_term):
 def detect_patterns_and_levels(df):
     if len(df) < 3: return [], 0, 0  
     latest = df.iloc[-1]
+    prev = df.iloc[-2]
     patterns = []
+    
     body = abs(latest['Open'] - latest['Close'])
-    lower_shadow, upper_shadow = min(latest['Open'], latest['Close']) - latest['Low'], latest['High'] - max(latest['Open'], latest['Close'])
+    candle_range = latest['High'] - latest['Low']
+    lower_shadow = min(latest['Open'], latest['Close']) - latest['Low']
+    upper_shadow = latest['High'] - max(latest['Open'], latest['Close'])
     
-    if lower_shadow > body * 2 and upper_shadow < body: patterns.append("🔨 망치형 (바닥권 반등 신호)")
-    if len(df) >= 2 and latest['Close'] > latest['Open'] and latest['Close'] > df['High'].iloc[-2]: patterns.append("🚀 상승 장악형 (추세 전환)")
+    # 1. 망치형 / 교수형 정밀 판정 (위치에 따른 분기)
+    if candle_range > 0:
+        if body <= candle_range * 0.35 and lower_shadow >= candle_range * 0.5 and upper_shadow <= candle_range * 0.15:
+            is_pullback = (not pd.isna(latest['MA20']) and latest['Close'] <= latest['MA20']) or (len(df) >= 5 and latest['Close'] < df['Close'].iloc[-5])
+            if is_pullback:
+                patterns.append("🔨 망치형 (바닥권 반등 신호)")
+            else:
+                patterns.append("⚠️ 교수형 (고점 경고 신호)")
+
+    # 2. 장악형 패턴 정밀 판정 (상승 장악형 / 하락 장악형)
+    prev_body = abs(prev['Open'] - prev['Close'])
+    if prev['Close'] < prev['Open'] and latest['Close'] > latest['Open']:  # 전일 음봉, 당일 양봉
+        if latest['Open'] <= prev['Open'] and latest['Close'] > prev['Open'] and body >= prev_body:
+            patterns.append("🚀 상승 장악형 (추세 반전)")
+    elif prev['Close'] > prev['Open'] and latest['Close'] < latest['Open']:  # 전일 양봉, 당일 음봉
+        if latest['Open'] >= prev['Open'] and latest['Close'] < prev['Open'] and body >= prev_body:
+            patterns.append("🚨 하락 장악형 (하락 반전 경고)")
     
-    lookback = min(61, len(df))
+    # 3. 지지선 / 저항선 및 신고가 산출 (최대 250거래일 기준)
+    lookback = min(250, len(df))
     past_df = df.iloc[-lookback:-1] if lookback > 1 else df.iloc[:-1]
     if past_df.empty:
         return patterns, latest['Close'] * 0.95, latest['Close'] * 1.05
     
-    closes = past_df['Close']
-    tolerance = closes.mean() * 0.02
+    cur_price = latest['Close']
+    tolerance = cur_price * 0.025
     
-    def cluster_levels(price_series):
-        prices = sorted(price_series.tolist())
+    def cluster_levels(prices_list):
+        if not prices_list: return []
+        sorted_prices = sorted(prices_list)
         clusters = []
-        for p in prices:
+        for p in sorted_prices:
             matched = False
             for c in clusters:
                 if abs(p - c['center']) <= tolerance:
@@ -196,31 +226,41 @@ def detect_patterns_and_levels(df):
                     break
             if not matched:
                 clusters.append({'center': p, 'prices': [p]})
-        clusters.sort(key=lambda x: len(x['prices']), reverse=True)
         return clusters
 
-    low_mask = (closes < closes.shift(1)) & (closes < closes.shift(-1))
-    support_candidates = closes[low_mask]
-    resistance_candidates = closes[(closes > closes.shift(1)) & (closes > closes.shift(-1))]
+    # 저점 후보 (지지): Low 및 Close의 로컬 미니멈
+    low_series = past_df['Low']
+    low_mask = (low_series <= low_series.shift(1)) & (low_series <= low_series.shift(-1))
+    support_candidates = past_df.loc[low_mask, 'Low'].tolist()
+    close_low_mask = (past_df['Close'] <= past_df['Close'].shift(1)) & (past_df['Close'] <= past_df['Close'].shift(-1))
+    support_candidates.extend(past_df.loc[close_low_mask, 'Close'].tolist())
 
-    if len(support_candidates) >= 2:
-        sup_clusters = cluster_levels(support_candidates)
-        valid_sup = [c for c in sup_clusters if c['center'] <= latest['Close']]
-        support = valid_sup[0]['center'] if valid_sup else (closes[closes <= latest['Close']].min() if not closes[closes <= latest['Close']].empty else closes.min())
-    else:
-        below = closes[closes <= latest['Close']]
-        support = below.min() if not below.empty else closes.min()
+    # 고점 후보 (저항): High 및 Close의 로컬 맥시멈
+    high_series = past_df['High']
+    high_mask = (high_series >= high_series.shift(1)) & (high_series >= high_series.shift(-1))
+    resistance_candidates = past_df.loc[high_mask, 'High'].tolist()
+    close_high_mask = (past_df['Close'] >= past_df['Close'].shift(1)) & (past_df['Close'] >= past_df['Close'].shift(-1))
+    resistance_candidates.extend(past_df.loc[close_high_mask, 'Close'].tolist())
 
-    above = closes[closes > latest['Close']] 
-    if above.empty:
-        resistance = 0  
+    # 지지선 산출: 현재가 이하 클러스터 중 현재가에 가장 가까우면서도 지지 신뢰도가 높은 레벨
+    sup_clusters = cluster_levels(support_candidates)
+    valid_sups = [c for c in sup_clusters if c['center'] <= cur_price]
+    if valid_sups:
+        valid_sups.sort(key=lambda c: abs(cur_price - c['center']) / (len(c['prices']) ** 0.5))
+        support = valid_sups[0]['center']
     else:
-        if len(resistance_candidates) >= 2:
-            res_clusters = cluster_levels(resistance_candidates)
-            valid_res = [c for c in res_clusters if c['center'] > latest['Close']]
-            resistance = valid_res[0]['center'] if valid_res else above.max()
-        else:
-            resistance = above.max()
+        below_lows = past_df[past_df['Low'] <= cur_price]['Low']
+        support = below_lows.max() if not below_lows.empty else past_df['Low'].min()
+
+    # 저항선 산출: 현재가 초과 클러스터 중 현재가에 가장 가까운 저항 레벨
+    res_clusters = cluster_levels(resistance_candidates)
+    valid_res = [c for c in res_clusters if c['center'] > cur_price]
+    if valid_res:
+        valid_res.sort(key=lambda c: abs(c['center'] - cur_price) / (len(c['prices']) ** 0.5))
+        resistance = valid_res[0]['center']
+    else:
+        above_highs = past_df[past_df['High'] > cur_price]['High']
+        resistance = 0 if above_highs.empty else above_highs.min()
 
     return patterns, support, resistance
 
@@ -238,53 +278,70 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     obv_lookback    = simple_lookback if is_short_term else long_lookback
     simple_prev_obv = float(df['OBV'].iloc[-obv_lookback])
     
-    swing_lookback = min(60, len(df))
-    past_df = df.iloc[-swing_lookback:]
-    local_min_mask = (past_df['Close'] < past_df['Close'].shift(1)) & (past_df['Close'] < past_df['Close'].shift(2)) & \
-                     (past_df['Close'] < past_df['Close'].shift(-1)) & (past_df['Close'] < past_df['Close'].shift(-2))
-    local_min_df = past_df[local_min_mask]
-    
     bullish_div = False
-    if len(local_min_df) >= 2:
-        t1, t2 = local_min_df.iloc[-2], local_min_df.iloc[-1]
-        if t2['Close'] < t1['Close'] and (t2['OBV'] > t1['OBV'] or t2['RSI'] > t1['RSI']): 
-            bullish_div = True
+    if len(df) >= 15:
+        recent_chunk = df.iloc[-4:]
+        past_chunk = df.iloc[-30:-4] if len(df) >= 30 else df.iloc[:-4]
+        if not past_chunk.empty and not recent_chunk.empty:
+            p_min_idx = past_chunk['Low'].idxmin()
+            r_min_idx = recent_chunk['Low'].idxmin()
+            p_low = float(past_chunk.loc[p_min_idx, 'Low'])
+            r_low = float(recent_chunk.loc[r_min_idx, 'Low'])
+            # 최근 저가가 이전 저가 이하이거나 거의 유사(신저가 형성)
+            if r_low <= p_low * 1.01:
+                p_rsi = float(past_chunk.loc[p_min_idx, 'RSI'])
+                r_rsi = float(recent_chunk.loc[r_min_idx, 'RSI'])
+                p_obv = float(past_chunk.loc[p_min_idx, 'OBV'])
+                r_obv = float(recent_chunk.loc[r_min_idx, 'OBV'])
+                # 주가는 하락했으나 RSI나 OBV 저점은 뚜렷하게 높아지는 다이버전스
+                if (not pd.isna(r_rsi) and not pd.isna(p_rsi) and r_rsi > p_rsi + 2.0) or \
+                   (not pd.isna(r_obv) and not pd.isna(p_obv) and r_obv > p_obv):
+                    bullish_div = True
 
-    is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if len(df) > 120 else False
+    has_valid_adx = not pd.isna(adx)
+    has_valid_ma = not pd.isna(ma20) and not pd.isna(ma60)
+
+    is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if (len(df) > 120 and not pd.isna(latest['BBW'])) else False
     if is_squeeze: regime = "에너지 응축 (스퀴즈)"
-    elif vol_ratio >= 150 and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
-    elif adx < 25: regime = "횡보 박스"
-    elif ma20 >= ma60 and close >= ma60: regime = "강세 추세" if p_di > m_di else "상승 조정"
+    elif vol_ratio >= 150 and has_valid_adx and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
+    elif has_valid_adx and adx < 25: regime = "횡보 박스"
+    elif has_valid_ma and ma20 >= ma60 and close >= ma60: regime = "강세 추세" if p_di > m_di else "상승 조정"
+    elif len(df) < 30: regime = "데이터 수집/안정화 중"
     else: regime = "약세 추세"
 
-    box_pos = (close - sup) / (res - sup) * 100 if res > sup else 100
+    box_pos = ((close - sup) / (res - sup) * 100) if (res > sup and sup > 0) else 100
     drop_pct = ((prev['Close'] - close) / prev['Close'] * 100) if prev['Close'] > 0 else 0
     is_falling_knife = (drop_pct >= 7.0 and vol_ratio >= 120) or (drop_pct >= 10.0)
 
     macd_diff = float(latest['MACD'] - latest['Signal']) if not pd.isna(latest['MACD']) and not pd.isna(latest['Signal']) else 0
     vol_pct = (atr / close) * 100 if close > 0 else 0
 
+    adx_disp = f"**{adx:.1f}**" if has_valid_adx else "**산출 중**"
     comments = {}
-    comments['ADX'] = f"현재 ADX 추세강도 지수는 **{adx:.1f}**이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
+    comments['ADX'] = f"현재 ADX 추세강도 지수는 {adx_disp}이며, 알고리즘은 현재 시장을 **[{regime}]** 국면으로 확정했습니다."
     
+    rsi_disp = f"RSI({rsi:.1f})" if not pd.isna(rsi) else "RSI(산출 중)"
     if regime == "에너지 응축 (스퀴즈)":
-        comments['RSI'] = f"RSI({rsi:.1f}): 볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다."
+        comments['RSI'] = f"{rsi_disp}: 볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다. 폭풍 전야의 고요한 상태입니다."
     elif regime == "횡보 박스":
-        comments['RSI'] = f"RSI({rsi:.1f}): 횡보장에서는 RSI의 신뢰도가 가장 높습니다. " + ("박스권 하단 지지선(과매도) 터치로 기술적 반등이 예상됩니다." if rsi <= 40 else "박스권 상단 저항선(과매수) 도달로 조정이 예상됩니다." if rsi >= 60 else "박스권 중간에서 뚜렷한 방향성을 탐색 중입니다.")
+        comments['RSI'] = f"{rsi_disp}: 횡보장에서는 RSI의 신뢰도가 가장 높습니다. " + ("박스권 하단 지지선(과매도) 터치로 기술적 반등이 예상됩니다." if (not pd.isna(rsi) and rsi <= 40) else "박스권 상단 저항선(과매수) 도달로 조정이 예상됩니다." if (not pd.isna(rsi) and rsi >= 60) else "박스권 중간에서 뚜렷한 방향성을 탐색 중입니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 뚜렷한 추세가 부재한 박스권이므로 MACD 크로스 신호의 신뢰도는 다소 떨어집니다."
     elif regime == "강세 추세":
-        comments['RSI'] = f"RSI({rsi:.1f}): 강세장에서는 지표가 쉽게 과열권에 진입합니다. " + ("강한 매수세로 단기 과열(70 이상) 상태이나 추세는 굳건합니다." if rsi >= 70 else "상승 추세 중 발생한 건전한 눌림목(조정) 타점입니다." if rsi <= 50 else "안정적인 상승 탄력을 유지하고 있습니다.")
+        comments['RSI'] = f"{rsi_disp}: 강세장에서는 지표가 쉽게 과열권에 진입합니다. " + ("강한 매수세로 단기 과열(70 이상) 상태이나 추세는 굳건합니다." if (not pd.isna(rsi) and rsi >= 70) else "상승 추세 중 발생한 건전한 눌림목(조정) 타점입니다." if (not pd.isna(rsi) and rsi <= 50) else "안정적인 상승 탄력을 유지하고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 상승 모멘텀이 강하게 유지되며 이평선 정배열 확장을 지지하고 있습니다."
     elif regime == "상승 조정": 
-        comments['RSI'] = f"RSI({rsi:.1f}): 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다."
+        comments['RSI'] = f"{rsi_disp}: 상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다."
     elif regime == "약세 추세":
-        comments['RSI'] = f"RSI({rsi:.1f}): 약세장에서는 지표가 지속적으로 침체권에 머눕니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if rsi >= 55 else "극단적 과매도 상태이나, 지속적인 하락 압력을 받고 있으므로 섣부른 진입은 피해야 합니다." if rsi <= 30 else "지속적인 하락 압력을 받고 있습니다.")
+        comments['RSI'] = f"{rsi_disp}: 약세장에서는 지표가 지속적으로 침체권에 머눕니다. " + ("일시적인 기술적 반등 구간으로 매도를 고려할 시점입니다." if (not pd.isna(rsi) and rsi >= 55) else "극단적 과매도 상태이나, 지속적인 하락 압력을 받고 있으므로 섣부른 진입은 피해야 합니다." if (not pd.isna(rsi) and rsi <= 30) else "지속적인 하락 압력을 받고 있습니다.")
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다."
     elif regime == "변동성 폭발":
-        comments['RSI'] = f"RSI({rsi:.1f}): 변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다."
+        comments['RSI'] = f"{rsi_disp}: 변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다."
         comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 단기 모멘텀이 평소의 범위를 벗어나 급격하게 방향성을 분출하고 있습니다."
+    else:
+        comments['RSI'] = f"{rsi_disp}: 데이터 축적 중으로 지표 신뢰도를 검증 중입니다."
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): 추세 형성 초기 단계입니다."
 
     comments['VOL'] = f"상대 거래량이 평균 대비 **{vol_ratio:.0f}%** 수준입니다. " + ("대량 거래가 터지며 시장의 강한 이목이 집중되었습니다." if vol_ratio > 150 else "평이한 수준의 거래가 이뤄지고 있습니다.")
     comments['OBV'] = f"최근 {obv_lookback}{time_unit}간 누적 수급(OBV)이 **{'상승(자금 유입)' if obv > simple_prev_obv else '하락(자금 이탈)'}** 중입니다."
@@ -313,7 +370,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
                 else: pos, strategy = "🔵 데드캣 바운스 경계 (매도)", "수급 뒷받침이 부족한 단순 기술적 반등(속임수)일 확률이 높습니다. 탈출 기회로 삼으십시오."
             elif rsi <= 30 or bullish_div: pos, strategy = "🟠 단기 기술적 반등 공략", "극단적 과매도 및 다이버전스 발생. 짧은 수익을 목표로 한 기술적 반등 매매만 권장합니다."
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 물타기를 자제하고 현금 비중을 높여 관망하십시오."
-        else: pos, strategy = "🔴 돌파 추세 추종", "평균을 상회하는 대량 거래와 상방 돌파 발생. 새로운 추세 형성 초입으로 적극 추종이 유리합니다."
+        elif regime == "변동성 폭발":
+            if close > prev_candle_close:
+                pos, strategy = "🔴 돌파 추세 추종", "평균을 상회하는 대량 거래와 함께 상방 돌파 분출. 단기 모멘텀 추종이 유리합니다."
+            else:
+                pos, strategy = "🔷 하방 변동성 폭발 (적극 관망)", "대량 거래를 동반한 강한 하방 이탈 발생. 추가 낙폭 위험이 크므로 절대 매수를 금지합니다."
+        else:
+            pos, strategy = "⚖️ 단기 관망", "뚜렷한 추세나 타점이 부재한 변곡점 구간입니다. 명확한 방향성 확인 후 대응하십시오."
     else:
         if is_falling_knife:
             pos, strategy = "🔷 장기 투매 진행 중 (절대 매수금지)", "주봉 기준 대량 거래를 동반한 장대음봉 폭락이 포착되었습니다. 추가 연쇄 하락 위험이 극도로 큽니다."
@@ -401,24 +464,60 @@ def scan_200_pullback(top_n=200):
     if krx_df.empty: return pd.DataFrame()
     krx_df['Marcap'] = pd.to_numeric(krx_df['Marcap'], errors='coerce')
     target_stocks = krx_df.sort_values('Marcap', ascending=False).head(top_n)
-    found_stocks = []
-    progress_bar = st.progress(0, text="📡 우량주 데이터 스캔 중...")
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=400) 
-    for i, (idx, row) in enumerate(target_stocks.iterrows()):
-        progress_bar.progress((i + 1) / top_n, text=f"📡 스캔 중... ({i+1}/{top_n}) - {row['Name']}")
+    
+    start_date_str = (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d')
+    progress_bar = st.progress(0, text=f"📡 우량주 {top_n}개 종목 고속 병렬 스캔 중...")
+    
+    def check_stock(row_data):
+        name, code = row_data['Name'], row_data['Code']
         try:
-            df = fdr.DataReader(row['Code'], start=start_date.strftime('%Y-%m-%d'))
-            if len(df) < 210: continue
+            df = fdr.DataReader(code, start=start_date_str)
+            if len(df) < 210: return None
             df['MA5'] = df['Close'].rolling(5).mean()
             df['MA200'] = df['Close'].rolling(200).mean()
             latest, prev = df.iloc[-1], df.iloc[-2]
-            if (df['MA200'].diff().tail(10) <= 0).any(): continue
-            if not (0.98 <= prev['Low'] / prev['MA200'] <= 1.03): continue
-            if latest['Close'] <= latest['Open']: continue
-            if not (prev['Close'] <= prev['MA5'] and latest['Close'] > latest['MA5']): continue
-            found_stocks.append({'종목명': row['Name'], '종목코드': row['Code'], '현재가': int(latest['Close']), '200일선': int(latest['MA200'])})
-        except Exception: pass
+            
+            # 1. 200일선 우상향 확인 (최근 10거래일 전 대비 상승 또는 수평)
+            if latest['MA200'] < df['MA200'].iloc[-10]: return None
+            
+            # 2. 200일선 부근 지지/눌림목 확인 (전일 또는 당일 저가가 200일선의 97%~104% 사이)
+            near_200 = (0.97 <= prev['Low'] / prev['MA200'] <= 1.04) or (0.97 <= latest['Low'] / latest['MA200'] <= 1.04)
+            if not near_200: return None
+            
+            # 3. 당일 양봉 확인
+            if latest['Close'] <= latest['Open']: return None
+            
+            # 4. 5일선 골든크로스 또는 5일선 지지 돌파
+            crossed_5 = (prev['Close'] <= prev['MA5'] and latest['Close'] > latest['MA5']) or (latest['Low'] <= latest['MA5'] and latest['Close'] > latest['MA5'])
+            if not crossed_5: return None
+            
+            disparity = (latest['Close'] / latest['MA200'] - 1) * 100
+            diff_pct = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+            return {
+                '종목명': name,
+                '종목코드': code,
+                '현재가': int(latest['Close']),
+                '200일선': int(latest['MA200']),
+                '200일선 이격도': f"{disparity:+.1f}%",
+                '당일 등락률': f"{diff_pct:+.2f}%"
+            }
+        except Exception:
+            return None
+
+    stock_rows = target_stocks[['Name', 'Code']].to_dict('records')
+    found_stocks = []
+    total = len(stock_rows)
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(check_stock, s): s for s in stock_rows}
+        completed = 0
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                found_stocks.append(res)
+            completed += 1
+            progress_bar.progress(completed / total, text=f"📡 고속 병렬 스캔 중... ({completed}/{total})")
+            
     progress_bar.empty()
     return pd.DataFrame(found_stocks)
 
@@ -434,7 +533,7 @@ if app_menu == "📊 단일 종목 심층 분석":
     with st.sidebar:
         st.header("⚙️ 분석 설정")
         analyze_mode = st.radio("투자 성향 설정", ["단기 스윙 (6개월 차트/일봉)", "중장기 대세 (2년 차트/주봉)"])
-        new_query = st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
+        st.text_input("종목명/코드 입력", placeholder="삼성전자, NVDA 등", key="search_input", on_change=on_search_input_change)
         if st.button("🚀 분석 실행", type="primary") or st.session_state.trigger_search:
             if st.session_state.search_input and not st.session_state.trigger_search:
                 st.session_state.target_query = st.session_state.search_input
@@ -459,9 +558,15 @@ if app_menu == "📊 단일 종목 심층 분석":
             weekly_raw = raw_df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             chart_df_weekly = calculate_indicators(weekly_raw)
             weekly_bullish = None
-            if not chart_df_weekly.empty:
+            if not chart_df_weekly.empty and len(chart_df_weekly) >= 2:
                 w_latest = chart_df_weekly.iloc[-1]
-                weekly_bullish = (w_latest['Close'] > w_latest['MA60']) and (w_latest['MACD'] > w_latest['Signal'])
+                has_w_ma60 = 'MA60' in chart_df_weekly.columns and not pd.isna(w_latest['MA60'])
+                has_w_macd = ('MACD' in chart_df_weekly.columns and 'Signal' in chart_df_weekly.columns and 
+                              not pd.isna(w_latest['MACD']) and not pd.isna(w_latest['Signal']))
+                if has_w_ma60 and has_w_macd:
+                    weekly_bullish = (w_latest['Close'] > w_latest['MA60']) and (w_latest['MACD'] > w_latest['Signal'])
+                elif has_w_macd:
+                    weekly_bullish = w_latest['MACD'] > w_latest['Signal']
             chart_df = chart_df_daily if is_short_term else chart_df_weekly
             default_days = 180 if is_short_term else 730 
             cur_price = raw_df['Close'].iloc[-1]
@@ -472,7 +577,7 @@ if app_menu == "📊 단일 종목 심층 분석":
             st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
             st.progress(q_score / 100)
             pts, sup, res = detect_patterns_and_levels(chart_df)
-            if len(chart_df) < 2: st.warning("데이터가 부족합니다.")
+            if len(chart_df) < 5: st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
             else:
                 pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish)
                 c1, c2 = st.columns(2)
@@ -487,6 +592,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                         sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "데이터 부족"
                         res_txt = "✨ 신고가 (저항 없음)" if res == 0 else (f"{res:,.{decimals}f} {md_curr_ui}" if res > 0 else "데이터 부족")
                         st.write(f"🛡️ **지지선:** {sup_txt} | 🚧 **저항선:** {res_txt}")
+                        if pts:
+                            st.info(f"🕯️ **포착된 캔들 패턴:** {' | '.join(pts)}")
                 with st.expander("🔬 지표별 상세 분석", expanded=True):
                     desc = {"ADX 추세강도": "ADX: 추세 파워 측정.", "상대 거래량": "Relative Vol: 거래량 비율.", "OBV 누적": "OBV: 세력 매집 지표.", "RSI 강도": "RSI: 과열/침체 수치.", "MACD 흐름": "MACD: 추세 방향 파악.", "ATR 변동성": "ATR: 실질 변동폭."}
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
@@ -507,11 +614,15 @@ if app_menu == "📊 단일 종목 심층 분석":
                     fig.add_trace(go.Bar(x=p_df.index, y=p_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
                     fig.update_layout(height=600, margin=dict(t=10, b=10, l=0, r=0), hovermode='x unified', showlegend=False)
                     fig.update_xaxes(rangeslider=dict(visible=False))
+                    if is_short_term:
+                        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                 with tab2:
                     if 'OBV' in p_df.columns:
                         ofig = go.Figure(data=[go.Scatter(x=p_df.index, y=p_df['OBV'], fill='tozeroy', line=dict(color='purple'))])
                         ofig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0))
+                        if is_short_term:
+                            ofig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
                         st.plotly_chart(ofig, use_container_width=True)
     else: 
         st.info("👈 사이드바에서 종목을 검색하여 분석을 시작하세요.")
@@ -525,7 +636,9 @@ elif app_menu == "🎯 200일선 눌림목 포착":
         st.divider()
         if not res_df.empty:
             st.success(f"🎉 {len(res_df)}개의 종목을 포착했습니다.")
-            res_df['현재가'] = res_df['현재가'].apply(lambda x: f"{x:,} 원")
-            res_df['200일선'] = res_df['200일선'].apply(lambda x: f"{x:,} 원")
+            if '현재가' in res_df.columns:
+                res_df['현재가'] = res_df['현재가'].apply(lambda x: f"{x:,} 원" if isinstance(x, (int, float)) else str(x))
+            if '200일선' in res_df.columns:
+                res_df['200일선'] = res_df['200일선'].apply(lambda x: f"{x:,} 원" if isinstance(x, (int, float)) else str(x))
             st.dataframe(res_df, use_container_width=True, hide_index=True)
         else: st.warning("조건에 일치하는 종목이 없습니다.")
