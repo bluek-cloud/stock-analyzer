@@ -6,6 +6,7 @@ import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os, io, requests
 
 # ==========================================
 # 1. 페이지 설정 및 세션 관리 (상태 꼬임 무한루프 버그 패치)
@@ -58,46 +59,126 @@ def on_search_input_change():
         st.session_state.target_query = st.session_state.search_input
 
 # ==========================================
-# 2. 공통 데이터 처리 함수 (외풍 방어막 유지)
+# 2. 공통 데이터 처리 함수 (3중 안전망 KRX 데이터베이스)
 # ==========================================
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'krx_cache.csv')
+
 @st.cache_data(ttl=86400)
 def get_krx_data():
+    today = datetime.now()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    # 1. GitHub 캐시 (오늘부터 과거 14일 역추적하여 존재하는 최신 파일 로드)
+    for i in range(14):
+        dt_str = (today - timedelta(days=i)).strftime('%Y-%m-%d')
+        url = f'https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache/refs/heads/master/data/listing/krx/{dt_str}.csv'
+        try:
+            r = requests.head(url, headers=headers, timeout=2)
+            if r.status_code == 200:
+                df = pd.read_csv(url, dtype={'Code': str, 'Dept': str, 'ChangeCode': str, 'MarketId': str})
+                if not df.empty:
+                    df['Code'] = df['Code'].astype(str).str.zfill(6)
+                    try:
+                        df[['Code', 'Name', 'Market', 'Marcap']].to_csv(CACHE_FILE, index=False)
+                    except Exception:
+                        pass
+                    return df[['Code', 'Name', 'Market', 'Marcap']]
+        except Exception:
+            continue
+            
+    # 2. 한국거래소 KIND 공식 상장회사 목록 다운로드 (100% 실시간 작동)
     try:
-        return fdr.StockListing('KRX')
+        url = 'http://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13'
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            dfs = pd.read_html(io.StringIO(r.text), header=0)
+            df_kind = dfs[0].rename(columns={'회사명': 'Name', '종목코드': 'Code'})
+            df_kind['Code'] = df_kind['Code'].astype(str).str.zfill(6)
+            df_kind['Market'] = 'KRX'
+            df_kind['Marcap'] = 0
+            try:
+                df_kind[['Code', 'Name', 'Market', 'Marcap']].to_csv(CACHE_FILE, index=False)
+            except Exception:
+                pass
+            return df_kind[['Code', 'Name', 'Market', 'Marcap']]
     except Exception:
+        pass
+
+    # 3. 로컬 디스크 캐시 파일 로드 (오프라인/네트워크 장애 대비)
+    if os.path.exists(CACHE_FILE):
+        try:
+            df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
+            df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
+            return df_local[['Code', 'Name', 'Market', 'Marcap']]
+        except Exception:
+            pass
+
+    raise ConnectionError("KRX 종목 목록을 가져올 수 없습니다.")
+
+def _get_krx_data_safe():
+    """KRX 데이터 로드 실패 시에도 크래시 없이 로컬 캐시 또는 빈 DataFrame 반환"""
+    try:
+        return get_krx_data()
+    except Exception:
+        if os.path.exists(CACHE_FILE):
+            try:
+                df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
+                df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
+                return df_local[['Code', 'Name', 'Market', 'Marcap']]
+            except Exception:
+                pass
         return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap'])
 
 def parse_query(query):
-    query = query.strip().upper()
-    krx_df = get_krx_data()
+    raw_query = query.strip()
+    query_upper = raw_query.upper()
+    query_nospace = query_upper.replace(' ', '')
+    is_korean = any('\uac00' <= char <= '\ud7a3' for char in raw_query)
     
-    if not krx_df.empty:
-        if query.isdigit() and len(query) == 6:
-            matched = krx_df[krx_df['Code'] == query]
+    krx_df = _get_krx_data_safe()
+    
+    # 1. 6자리 숫자 코드 입력 (예: 005930)
+    if query_upper.isdigit() and len(query_upper) == 6:
+        if not krx_df.empty:
+            matched = krx_df[krx_df['Code'] == query_upper]
             if not matched.empty:
-                return f"{matched.iloc[0]['Name']} ({query})", query, query, "원", 0
-        matched = krx_df[krx_df['Name'] == query]
+                return f"{matched.iloc[0]['Name']} ({query_upper})", query_upper, raw_query, "원", 0
+        return f"국내 종목 ({query_upper})", query_upper, raw_query, "원", 0
+        
+    # 2. 국내 종목명 매칭 (완전일치 -> 공백제거일치 -> 접두사일치 -> 부분일치)
+    if not krx_df.empty:
+        matched = krx_df[krx_df['Name'].str.upper() == query_upper]
+        if matched.empty:
+            matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper() == query_nospace]
+        if matched.empty:
+            matched = krx_df[krx_df['Name'].str.upper().str.startswith(query_upper)]
+        if matched.empty and len(query_upper) >= 2:
+            matched = krx_df[krx_df['Name'].str.upper().str.contains(query_upper, regex=False)]
+            
         if not matched.empty:
             code = matched.iloc[0]['Code']
-            return f"{query} ({code})", code, query, "원", 0
-            
-    if query.isdigit() and len(query) == 6:
-        return f"국내 종목 ({query})", query, query, "원", 0
-    return f"{query} (해외)", query, query, "$", 2
+            name = matched.iloc[0]['Name']
+            return f"{name} ({code})", code, raw_query, "원", 0
+
+    # 3. 한글이 포함된 경우 (절대 해외로 보내지 않음)
+    if is_korean:
+        return f"{raw_query} (국내 종목 미확인)", raw_query, raw_query, "원", 0
+
+    # 4. 영문 티커 (해외 주식)
+    return f"{query_upper} (해외)", query_upper, raw_query, "$", 2
 
 @st.cache_data(ttl=60)
 def get_stock_data(code, days=1825):
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    try:
-        df = fdr.DataReader(code, start=start_date)
-        if df.empty: return pd.DataFrame()
-        if df.index.tz is not None:
-            try:
-                df.index = df.index.tz_convert(None)
-            except Exception:
-                df.index = df.index.tz_localize(None)
-        return df
-    except Exception: return pd.DataFrame()
+    df = fdr.DataReader(code, start=start_date)
+    if df.empty:
+        raise ConnectionError(f"'{code}' 데이터 수신 실패")
+    if df.index.tz is not None:
+        try:
+            df.index = df.index.tz_convert(None)
+        except Exception:
+            df.index = df.index.tz_localize(None)
+    return df
 
 def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
@@ -460,7 +541,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 # 3. 신규 스캐너 함수 (200일선 눌림목)
 # ==========================================
 def scan_200_pullback(top_n=200):
-    krx_df = get_krx_data()
+    krx_df = _get_krx_data_safe()
     if krx_df.empty: return pd.DataFrame()
     krx_df['Marcap'] = pd.to_numeric(krx_df['Marcap'], errors='coerce')
     target_stocks = krx_df.sort_values('Marcap', ascending=False).head(top_n)
@@ -549,8 +630,11 @@ if app_menu == "📊 단일 종목 심층 분석":
             st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
             st.session_state.recent_searches = st.session_state.recent_searches[:5]
         with st.spinner(f"📡 '{display_name}' 분석 중..."):
-            raw_df = get_stock_data(ticker_symbol)
-        if raw_df.empty: st.error("데이터를 찾을 수 없습니다.")
+            try:
+                raw_df = get_stock_data(ticker_symbol)
+            except Exception:
+                raw_df = pd.DataFrame()
+        if raw_df.empty: st.error("⚠️ 데이터를 불러올 수 없습니다. 종목명/코드를 확인하거나, 잠시 후 다시 시도해 주세요. (데이터 서버 일시 장애 가능성)")
         else:
             is_short_term = "단기" in analyze_mode
             time_unit = "일" if is_short_term else "주"
