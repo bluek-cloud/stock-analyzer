@@ -437,18 +437,20 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         elif regime == "횡보 박스":
             if box_pos <= 35 or bullish_div: pos, strategy = "🟠 박스권 하단 매수", "박스권 하단 지지 확인 및 반전 시그널 발생. 상단을 목표로 한 단기 스윙 전략이 유효합니다."
             elif box_pos >= 65:
-                if obv > simple_prev_obv and vol_ratio >= 100: pos, strategy = "🟠 돌파 기대 (보유)", "저항선 근접했으나 긍정적 수급 유입 중. 돌파 여부를 예의주시하며 홀딩을 권장합니다."
-                elif obv > simple_prev_obv and vol_ratio < 100: pos, strategy = "⚖️ 돌파 탐색 (관망/분할매도)", "수급은 좋으나 폭발적 거래량이 부족합니다. 돌파 여부 관찰 및 일부 비중 축소를 고려하십시오."
-                else: pos, strategy = "🔵 단기 박스권 상단 매도", "저항 돌파를 위한 수급이 부족합니다. 리스크 관리를 위해 적극적인 비중 축소를 권장합니다."
+                if obv > simple_prev_obv and vol_ratio >= 100: pos, strategy = "🟠 돌파 기대 (보유)", "저항선 근접했으나 긍정적 수급과 거래량 유입 중. 돌파 여부를 예의주시하며 홀딩을 권장합니다."
+                elif obv > simple_prev_obv and vol_ratio < 100: pos, strategy = "⚖️ 저항 돌파 탐색 (관망)", "수급(OBV)은 양호하나 돌파를 확정짓기엔 거래량이 부족합니다. [신규] 돌파 확인 전까지 추격 매수를 자제하십시오. [보유자] 거래량 동반 돌파 시 홀딩하고, 저항 맞고 음봉 이탈 시에만 분할 익절로 대응하십시오."
+                else: pos, strategy = "🔵 단기 박스권 상단 매도", "저항선 부근이나 수급(OBV)마저 이탈 중입니다. 돌파 가능성이 낮으므로 리스크 관리를 위해 비중 축소를 권장합니다."
             else: pos, strategy = "⚖️ 단기 관망", "박스권 중간 지대 위치. 뚜렷한 타점 도달 전까지 진입을 자제하십시오."
         elif regime in ["강세 추세", "상승 조정"]:
             if rsi <= 55 or bullish_div: pos, strategy = "🔴 추세 눌림목 적극 매수", "강한 상승 추세 속 건전한 눌림목 발생. 확률 높은 매수 타점으로 평가됩니다."
-            elif rsi >= 75: pos, strategy = "🔵 분할 익절", "안정적 추세나 단기 과열권에 진입했습니다. 수익 보호를 위해 보유 비중 분할 실현을 권장합니다."
+            elif rsi >= 70 and adx < 30: pos, strategy = "🔵 분할 익절", "단기 과열권 진입이며 추세 강도(ADX)도 약해지고 있습니다. 수익 보호를 위해 보유 비중 분할 실현을 권장합니다."
+            elif rsi >= 70 and adx >= 30: pos, strategy = "🟠 추세 보유 (홀딩)", "단기 과열권이나 추세 강도(ADX)가 강력하여 추가 상승 여력이 있습니다. 추세 이탈 전까지 홀딩하십시오."
             else: pos, strategy = "🟠 추세 보유 (홀딩)", "우상향 흐름 진행 중. 상승 추세 이탈 전까지 지속 보유하여 수익을 극대화하십시오."
         elif regime == "약세 추세":
             if rsi >= 45 and close > prev['Close']:
-                if obv > simple_prev_obv and vol_ratio > 100: pos, strategy = "🟠 의미 있는 반등 시도", "하락장 속 유의미한 수급/거래량 동반 반등. 추세 전환의 단초가 될 수 있습니다."
-                else: pos, strategy = "🔵 데드캣 바운스 경계 (매도)", "수급 뒷받침이 부족한 단순 기술적 반등(속임수)일 확률이 높습니다. 탈출 기회로 삼으십시오."
+                if obv > simple_prev_obv and vol_ratio > 100: pos, strategy = "🟠 의미 있는 반등 시도", "하락장 속 유의미한 수급/거래량 동반 반등. 추세 전환의 단초가 될 수 있으나 신중하게 접근하십시오."
+                elif obv > simple_prev_obv: pos, strategy = "⚖️ 반등 관찰 (관망)", "수급은 개선되나 거래량 뒷받침이 미흡합니다. 진입보다 추가 확인이 필요한 시점입니다."
+                else: pos, strategy = "🔵 데드캣 바운스 경계 (매도)", "수급과 거래량 모두 뒷받침이 없는 단순 기술적 반등입니다. 보유자는 탈출 기회로 삼으십시오."
             elif rsi <= 30 or bullish_div: pos, strategy = "🟠 단기 기술적 반등 공략", "극단적 과매도 및 다이버전스 발생. 짧은 수익을 목표로 한 기술적 반등 매매만 권장합니다."
             else: pos, strategy = "🔷 적극 매도 및 관망", "하락 추세가 지배적입니다. 물타기를 자제하고 현금 비중을 높여 관망하십시오."
         elif regime == "변동성 폭발":
@@ -479,8 +481,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     sell_list = {
         "🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)",
         "🔷 투매 진행 중 (절대 관망)", "🔷 장기 투매 진행 중 (절대 매수금지)",
-        "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "🔷 하방 변동성 폭발 (적극 관망)",
-        "⚖️ 돌파 탐색 (관망/분할매도)"
+        "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "🔷 하방 변동성 폭발 (적극 관망)"
     }
     
     if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
