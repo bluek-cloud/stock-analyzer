@@ -383,12 +383,12 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     has_valid_ma = not pd.isna(ma20) and not pd.isna(ma60)
 
     is_squeeze = latest['BBW'] <= df['BBW'].iloc[-120:].min() * 1.05 if (len(df) > 120 and not pd.isna(latest['BBW'])) else False
-    if is_squeeze: regime = "에너지 응축 (스퀴즈)"
+    if len(df) < 30: regime = "데이터 수집/안정화 중"
+    elif is_squeeze: regime = "에너지 응축 (스퀴즈)"
     elif vol_ratio >= 150 and has_valid_adx and adx > df['ADX'].iloc[-2] and adx > 20: regime = "변동성 폭발"
-    elif has_valid_adx and adx < 25: regime = "횡보 박스"
     elif has_valid_ma and ma20 >= ma60 and close >= ma60: regime = "강세 추세" if p_di > m_di else "상승 조정"
-    elif len(df) < 30: regime = "데이터 수집/안정화 중"
-    else: regime = "약세 추세"
+    elif has_valid_ma and ma20 < ma60 and close < ma60: regime = "약세 추세"
+    else: regime = "횡보 박스"
 
     box_pos = ((close - sup) / (res - sup) * 100) if (res > sup and sup > 0) else 100
     drop_pct = ((prev['Close'] - close) / prev['Close'] * 100) if prev['Close'] > 0 else 0
@@ -432,7 +432,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         if is_falling_knife: pos, strategy = "🔷 투매 진행 중 (절대 관망)", "대량 거래를 동반한 치명적 급락 발생. '떨어지는 칼날'이므로 하락 진정 시까지 절대 관망하십시오."
         elif res == 0 and close > prev['Close']: pos, strategy = "🔴 신고가 랠리 (강력 홀딩)", "과거 매물대를 모두 뚫어낸 신고가 영역입니다. 추세 훼손 전까지 수익을 극대화하십시오."
         elif regime == "에너지 응축 (스퀴즈)":
-            if bullish_div: pos, strategy = "🔴 응축 구간 선취매", "에너지 응축 중 상승 다이버전스 포착. 상방 돌파 확률이 매우 높으므로 선취매가 유효합니다."
+            if bullish_div or (close > ma20 and obv > simple_prev_obv): pos, strategy = "🔴 상방 분출 기대 선취매", "에너지 응축 구간이나, 주가가 중심선(20일선) 위에 있고 수급이 유입 중입니다. 상방 폭발에 대비한 선취매가 유효합니다."
+            elif close < ma20 and obv < simple_prev_obv: pos, strategy = "🔷 하방 이탈 경계 (관망)", "에너지 응축 구간이며 주가가 중심선 아래에 있고 수급이 이탈 중입니다. 하방 폭락 위험이 있으니 관망하십시오."
             else: pos, strategy = "⚖️ 방향성 대기 (관망)", "볼린저 밴드 극도 수축 상태. 뚜렷한 방향성 분출 전까지 관망하십시오."
         elif regime == "횡보 박스":
             if box_pos <= 35 or bullish_div: pos, strategy = "🟠 박스권 하단 매수", "박스권 하단 지지 확인 및 반전 시그널 발생. 상단을 목표로 한 단기 스윙 전략이 유효합니다."
@@ -440,6 +441,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
                 if obv > simple_prev_obv and vol_ratio >= 100: pos, strategy = "🟠 돌파 기대 (보유)", "저항선 근접했으나 긍정적 수급과 거래량 유입 중. 돌파 여부를 예의주시하며 홀딩을 권장합니다."
                 elif obv > simple_prev_obv and vol_ratio < 100: pos, strategy = "⚖️ 저항 돌파 탐색 (관망)", "수급(OBV)은 양호하나 돌파를 확정짓기엔 거래량이 부족합니다. [신규] 돌파 확인 전까지 추격 매수를 자제하십시오. [보유자] 거래량 동반 돌파 시 홀딩하고, 저항 맞고 음봉 이탈 시에만 분할 익절로 대응하십시오."
                 else: pos, strategy = "🔵 단기 박스권 상단 매도", "저항선 부근이나 수급(OBV)마저 이탈 중입니다. 돌파 가능성이 낮으므로 리스크 관리를 위해 비중 축소를 권장합니다."
+            elif close > ma20 and obv > simple_prev_obv: pos, strategy = "🟠 박스권 중심 반등 공략", "박스권 중간 지대이나 중심선(20일선)을 회복하며 수급이 유입되고 있습니다. 박스 상단을 목표로 한 짧은 스윙이 가능합니다."
             else: pos, strategy = "⚖️ 단기 관망", "박스권 중간 지대 위치. 뚜렷한 타점 도달 전까지 진입을 자제하십시오."
         elif regime in ["강세 추세", "상승 조정"]:
             if rsi <= 55 or bullish_div: pos, strategy = "🔴 추세 눌림목 적극 매수", "강한 상승 추세 속 건전한 눌림목 발생. 확률 높은 매수 타점으로 평가됩니다."
@@ -474,18 +476,26 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
 
     buy_list = {
         "🔴 신고가 랠리 (강력 홀딩)", "🔴 추세 눌림목 적극 매수", "🔴 돌파 추세 추종",
-        "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🔴 장기 대시세 분출 (비중 확대)",
+        "🔴 상방 분출 기대 선취매", "🔴 응축 구간 선취매", "🔴 비중 확대 (장기)", "🔴 장기 대시세 분출 (비중 확대)",
         "🟠 박스권 하단 매수", "🟠 돌파 기대 (보유)", "🟠 의미 있는 반등 시도",
-        "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)"
+        "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집", "🟠 추세 보유 (홀딩)", "🟠 박스권 중심 반등 공략"
     }
     sell_list = {
         "🔵 단기 박스권 상단 매도", "🔵 분할 익절", "🔵 데드캣 바운스 경계 (매도)",
         "🔷 투매 진행 중 (절대 관망)", "🔷 장기 투매 진행 중 (절대 매수금지)",
-        "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "🔷 하방 변동성 폭발 (적극 관망)"
+        "🔷 적극 매도 및 관망", "🔷 비중 축소 (장기)", "🔷 하방 변동성 폭발 (적극 관망)",
+        "🔷 하방 이탈 경계 (관망)"
     }
     
-    if pos in buy_list and q_score < 30: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
-    elif pos in sell_list and q_score > 70 and not is_falling_knife: pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
+    bottom_fishing_list = {"🟠 박스권 하단 매수", "🟠 단기 기술적 반등 공략", "🟠 저점 분할 매집"}
+    
+    if pos in buy_list and q_score < 30:
+        if pos in bottom_fishing_list:
+            strategy += f" (참고: 퀀트 스코어는 {q_score}점으로 낮으나, 낙폭 과대에 따른 역발상 타점이므로 매수 관점을 유지합니다.)"
+        else:
+            pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매수/보유 신호가 포착되었으나 퀀트 스코어({q_score}점)가 다소 낮아 신뢰도가 떨어집니다. 관망을 권장합니다."
+    elif pos in sell_list and q_score > 70 and not is_falling_knife:
+        pos, strategy = ("⚖️ 단기 관망" if is_short_term else "⚖️ 장기 관망"), f"매도/비중축소 신호가 포착되었으나 퀀트 스코어({q_score}점)가 양호하여 상충이 발생합니다. 방향성 확인 후 대응하십시오."
 
     # 🌟 이중 이스케이프 제거: 한 줄씩 예쁘게 개행되도록 순수 \n\n으로 정렬
     mode_str = "단기 스윙" if is_short_term else "장기 가치투자"
