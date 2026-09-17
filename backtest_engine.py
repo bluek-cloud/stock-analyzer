@@ -86,6 +86,9 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
         df['MA60'] = close.rolling(60).mean()
     if 'MA200' not in df.columns:
         df['MA200'] = close.rolling(200).mean()
+    if 'BB_Upper' not in df.columns:
+        std = close.rolling(20).std()
+        df['BB_Upper'] = df['MA20'] + (std * 2)
     if 'RSI' not in df.columns:
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0)
@@ -133,6 +136,19 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
             if not pd.isna(rsi_val) and rsi_val < 35 and cur_close > prev_close:
                 matched = True
 
+        # 5. 볼린저 밴드 상방 돌파
+        if not matched and setup_type in ["BOLLINGER_SQUEEZE_BREAKOUT", "AUTO"]:
+            bb_up = df['BB_Upper'].iloc[i]
+            if not pd.isna(bb_up) and cur_close > bb_up and cur_close > cur_open:
+                matched = True
+
+        # 6. 박스권 상단 돌파
+        if not matched and setup_type in ["BOX_BREAKOUT", "AUTO"]:
+            if i >= 21:
+                prev_20_high = high.iloc[i-20:i].max()
+                if cur_close > prev_20_high and cur_close > cur_open:
+                    matched = True
+
         if matched:
             # 진입 후 hold_days 경과 후 종가 확인
             exit_close = close.iloc[i + hold_days]
@@ -147,11 +163,18 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
             entry_date = df.index[i].strftime('%Y-%m-%d') if hasattr(df.index[i], 'strftime') else str(df.index[i])
             exit_date = df.index[i + hold_days].strftime('%Y-%m-%d') if hasattr(df.index[i + hold_days], 'strftime') else str(df.index[i + hold_days])
 
+            entry_p = round(float(cur_close), 2 if cur_close < 1000 else 0)
+            exit_p = round(float(exit_close), 2 if exit_close < 1000 else 0)
+            if entry_p.is_integer() if hasattr(entry_p, 'is_integer') else False:
+                entry_p = int(entry_p)
+            if exit_p.is_integer() if hasattr(exit_p, 'is_integer') else False:
+                exit_p = int(exit_p)
+
             signals.append({
                 'entry_date': entry_date,
-                'entry_price': int(cur_close),
+                'entry_price': entry_p,
                 'exit_date': exit_date,
-                'exit_price': int(exit_close),
+                'exit_price': exit_p,
                 'return_pct': round(ret_pct, 2),
                 'mfe_pct': round(mfe_pct, 2),
                 'mae_pct': round(mae_pct, 2),

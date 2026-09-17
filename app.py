@@ -518,7 +518,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                     'is_falling_knife': '초고위험 투매 경보' in comments.get('AI', ''),
                     'is_short_term': is_short_term
                 }
-                _, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
+                matched_key, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
 
                 if matched_stats:
                     with st.container(border=True):
@@ -534,14 +534,20 @@ if app_menu == "📊 단일 종목 심층 분석":
                         st.info(f"🎯 **실전 통계 가이드:** 권장 손절폭 **-{matched_stats['recommended_sl_pct']}%** | 1차 목표 익절 **+{matched_stats['recommended_tp_pct']}%** (평균 최대 낙폭: -{matched_stats['avg_mae']}%)")
 
                         # 인터랙티브 종목별 실전 시뮬레이션
-                        with st.expander("🎯 이 종목에서의 과거 실전 승률 즉석 시뮬레이션", expanded=False):
-                            st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 이 전략 셋업이 발생했을 때의 실제 성과를 실시간 계산합니다.")
+                        with st.expander(f"🎯 이 종목에서의 [{matched_stats['name']}] 과거 실전 승률 즉석 시뮬레이션", expanded=False):
+                            st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 **[{matched_stats['name']}]** 타점이 발생했을 때의 실제 성과를 실시간 계산합니다.")
                             sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
-                            sim_cache_key = f"sim_{ticker_symbol}_{is_short_term}"
+                            sim_cache_key = f"sim_{ticker_symbol}_{matched_key}_{is_short_term}"
 
                             if sim_btn:
                                 with st.spinner("⏳ 과거 전체 차트 스캔 및 타점 역추적 시뮬레이션 중..."):
-                                    sim_result = run_stock_backtest(chart_df, setup_type="AUTO", hold_days=20)
+                                    sim_result = run_stock_backtest(chart_df, setup_type=matched_key, hold_days=20)
+                                    if sim_result.get('total_trades', 0) == 0:
+                                        # 종목 특성상 해당 단독 패턴 표본이 적을 경우 유사 반등 셋업 전체(종합)로 자동 확장
+                                        fallback_sim = run_stock_backtest(chart_df, setup_type="AUTO", hold_days=20)
+                                        if fallback_sim.get('total_trades', 0) > 0:
+                                            fallback_sim['fallback_note'] = f"현재 종목에서는 [{matched_stats['name']}] 단독 표본이 적어, 유사 반등 셋업 전체(종합)로 자동 확장 시뮬레이션했습니다."
+                                            sim_result = fallback_sim
                                     st.session_state[sim_cache_key] = sim_result
 
                             if sim_cache_key in st.session_state:
@@ -551,6 +557,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                                 elif sim_res.get('total_trades', 0) == 0:
                                     st.info(sim_res.get('message', '타점이 포착되지 않았습니다.'))
                                 else:
+                                    if 'fallback_note' in sim_res:
+                                        st.caption(f"💡 {sim_res['fallback_note']}")
                                     sc1, sc2, sc3, sc4 = st.columns(4)
                                     sc1.metric("과거 총 타점", f"{sim_res['total_trades']} 회")
                                     sc2.metric("실제 승률", f"{sim_res['win_rate']}%", f"{sim_res['win_trades']}승 {sim_res['loss_trades']}패")
@@ -563,9 +571,9 @@ if app_menu == "📊 단일 종목 심층 분석":
                                         for t in sim_res['recent_trades']:
                                             trade_rows.append({
                                                 '진입일': t['entry_date'],
-                                                '진입가': f"{t['entry_price']:,} {currency}",
+                                                '진입가': f"{t['entry_price']:,.{decimals}f} {currency}",
                                                 '청산일': t['exit_date'],
-                                                '청산가': f"{t['exit_price']:,} {currency}",
+                                                '청산가': f"{t['exit_price']:,.{decimals}f} {currency}",
                                                 '수익률': f"{t['return_pct']:+.2f}%",
                                                 '최대반등(MFE)': f"+{t['mfe_pct']}%",
                                                 '결과': "✅ 승리" if t['is_win'] else "❌ 패배"
