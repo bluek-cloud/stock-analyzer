@@ -232,7 +232,7 @@ def reconcile_with_quant_score(pos, strategy, q_score, is_short_term, is_falling
 # ==========================================
 # 6. 메인 진입점: 상세 의견 및 심층 진단 리포트 생성
 # ==========================================
-def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish=None):
+def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, patterns=None, weekly_bullish=None):
     """
     기존 app.py와 100% 호환되는 진입점 함수.
     YAML 룰셋과 규칙 엔진을 통해 시장 국면, 포지션, 전략 및 마크다운 리포트를 생성.
@@ -416,7 +416,12 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
             ai_op += traps.get('bear_trap', "🚨 **[가짜 하락(Bear Trap) 주의]** 지지를 이탈했으나 하락 물량 방어 흔적(아랫꼬리)이 보입니다. 일시적 충격일 수 있습니다.\n\n")
 
     # 역사적 백테스트 통계 자동 삽입
-    _, matched_stats = match_current_setup({'regime': regime, 'bullish_div': bullish_div})
+    _, matched_stats = match_current_setup({
+        'regime': regime,
+        'bullish_div': bullish_div,
+        'is_falling_knife': is_falling_knife,
+        'patterns': patterns or []
+    })
     if matched_stats:
         ai_op += format_stats_for_report(matched_stats)
 

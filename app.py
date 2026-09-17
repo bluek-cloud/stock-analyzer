@@ -483,7 +483,7 @@ if app_menu == "📊 단일 종목 심층 분석":
             pts, sup, res = detect_patterns_and_levels(chart_df)
             if len(chart_df) < 5: st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
             else:
-                pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish)
+                pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
                 c1, c2 = st.columns(2)
                 with c1:
                     with st.container(border=True):
@@ -566,7 +566,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                                     sc4.metric("손익비", f"{sim_res['profit_factor']} : 1")
 
                                     if 'recent_trades' in sim_res and sim_res['recent_trades']:
-                                        st.markdown("##### 📋 최근 과거 타점 상세 내역 (20거래일 보유 기준)")
+                                        hold_label = "20거래일" if is_short_term else "20주"
+                                        st.markdown(f"##### 📋 최근 과거 타점 상세 내역 ({hold_label} 보유 기준)")
                                         trade_rows = []
                                         for t in sim_res['recent_trades']:
                                             trade_rows.append({

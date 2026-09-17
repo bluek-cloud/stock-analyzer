@@ -35,6 +35,10 @@ def match_current_setup(market_ctx, patterns=None):
     patterns = patterns or market_ctx.get('patterns', [])
     regime = market_ctx.get('regime', '')
     bullish_div = market_ctx.get('bullish_div', False)
+    is_falling_knife = market_ctx.get('is_falling_knife', False)
+
+    if is_falling_knife:
+        return None, None
 
     # 1. 상승 다이버전스 셋업
     if bullish_div and "BULLISH_DIVERGENCE" in stats:
@@ -59,8 +63,8 @@ def match_current_setup(market_ctx, patterns=None):
     if "횡보" in regime and "BOX_BREAKOUT" in stats:
         return "BOX_BREAKOUT", stats["BOX_BREAKOUT"]
 
-    # 기본 매칭 (200일선 눌림목)
-    return "MA200_PULLBACK", stats.get("MA200_PULLBACK")
+    # 기본 매칭: 일치하는 조건이 없으면 None 반환
+    return None, None
 
 
 def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
