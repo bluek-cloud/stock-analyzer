@@ -232,11 +232,20 @@ def reconcile_with_quant_score(pos, strategy, q_score, is_short_term, is_falling
 # ==========================================
 # 6. 메인 진입점: 상세 의견 및 심층 진단 리포트 생성
 # ==========================================
-def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, patterns=None, weekly_bullish=None):
+def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, time_unit, q_score, *args, patterns=None, weekly_bullish=None, **kwargs):
     """
     기존 app.py와 100% 호환되는 진입점 함수.
     YAML 룰셋과 규칙 엔진을 통해 시장 국면, 포지션, 전략 및 마크다운 리포트를 생성.
     """
+    if args:
+        if len(args) == 1:
+            if isinstance(args[0], (list, tuple)):
+                patterns = args[0]
+            else:
+                weekly_bullish = args[0]
+        elif len(args) >= 2:
+            patterns = args[0]
+            weekly_bullish = args[1]
     rules = load_rules()
     md_currency = currency.replace('$', r'\$')
 

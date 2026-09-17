@@ -483,7 +483,10 @@ if app_menu == "📊 단일 종목 심층 분석":
             pts, sup, res = detect_patterns_and_levels(chart_df)
             if len(chart_df) < 5: st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
             else:
-                pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
+                try:
+                    pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
+                except TypeError:
+                    pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish)
                 c1, c2 = st.columns(2)
                 with c1:
                     with st.container(border=True):
