@@ -510,12 +510,12 @@ if app_menu == "📊 단일 종목 심층 분석":
                 # ==========================================
                 # 통계적 백테스트 검증 및 종목별 시뮬레이터 카드
                 # ==========================================
-                regime_label = comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보'
+                regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
                 market_ctx_dict = {
                     'regime': regime_label,
                     'patterns': pts,
-                    'bullish_div': '상승 다이버전스' in comments.get('AI', ''),
-                    'is_falling_knife': '초고위험 투매 경보' in comments.get('AI', ''),
+                    'bullish_div': comments.get('bullish_div_raw', False),
+                    'is_falling_knife': comments.get('is_falling_knife_raw', False),
                     'is_short_term': is_short_term
                 }
                 matched_key, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
@@ -594,7 +594,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                     rag_cache_key = f"rag_report_{ticker_symbol}_{is_short_term}"
                     if gen_btn:
                         with st.spinner("📚 전문 지식 베이스 검색 및 월가 수석 애널리스트 리포트 작성 중..."):
-                            regime_label = comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보'
+                            regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
                             stock_info_dict = {
                                 'name': display_name.split(' (')[0],
                                 'code': ticker_symbol,
@@ -612,8 +612,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                             market_ctx_dict = {
                                 'regime': regime_label,
                                 'patterns': pts,
-                                'bullish_div': '상승 다이버전스' in comments.get('AI', ''),
-                                'is_falling_knife': '초고위험 투매 경보' in comments.get('AI', ''),
+                                'bullish_div': comments.get('bullish_div_raw', False),
+                                'is_falling_knife': comments.get('is_falling_knife_raw', False),
                                 'is_short_term': is_short_term
                             }
                             api_key_to_use = user_gemini_key if user_gemini_key else None

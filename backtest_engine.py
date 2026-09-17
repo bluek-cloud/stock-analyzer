@@ -117,8 +117,10 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
 
         # 2. 상승 장악형
         if not matched and setup_type in ["BULLISH_ENGULFING", "AUTO"]:
+            prev_body = abs(prev_open - prev_close)
+            cur_body = abs(cur_close - cur_open)
             if prev_close < prev_open and cur_close > cur_open:
-                if cur_open <= prev_open and cur_close > prev_open:
+                if cur_open <= prev_open and cur_close > prev_open and cur_body >= prev_body:
                     matched = True
 
         # 3. 망치형 캔들
@@ -126,8 +128,10 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
             c_range = cur_high - cur_low
             body = abs(cur_close - cur_open)
             lower_shadow = min(cur_open, cur_close) - cur_low
-            if c_range > 0 and body <= c_range * 0.35 and lower_shadow >= c_range * 0.5:
-                if cur_close <= df['MA20'].iloc[i]:
+            upper_shadow = cur_high - max(cur_open, cur_close)
+            if c_range > 0 and body <= c_range * 0.35 and lower_shadow >= c_range * 0.5 and upper_shadow <= c_range * 0.15:
+                is_pullback = (not pd.isna(df['MA20'].iloc[i]) and cur_close <= df['MA20'].iloc[i]) or (i >= 5 and cur_close < close.iloc[i-5])
+                if is_pullback:
                     matched = True
 
         # 4. RSI 과매도 반등

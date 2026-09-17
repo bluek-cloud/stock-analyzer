@@ -97,10 +97,10 @@ def detect_bullish_divergence(df):
 
     # 최근 저가가 이전 저가 이하이거나 거의 유사(신저가 형성)
     if r_low <= p_low * 1.01:
-        p_rsi = float(past_chunk.loc[p_min_idx, 'RSI']) if not pd.isna(past_chunk.loc[p_min_idx, 'RSI']) else None
-        r_rsi = float(recent_chunk.loc[r_min_idx, 'RSI']) if not pd.isna(recent_chunk.loc[r_min_idx, 'RSI']) else None
-        p_obv = float(past_chunk.loc[p_min_idx, 'OBV']) if not pd.isna(past_chunk.loc[p_min_idx, 'OBV']) else None
-        r_obv = float(recent_chunk.loc[r_min_idx, 'OBV']) if not pd.isna(recent_chunk.loc[r_min_idx, 'OBV']) else None
+        p_rsi = float(past_chunk.loc[p_min_idx, 'RSI']) if ('RSI' in past_chunk.columns and not pd.isna(past_chunk.loc[p_min_idx, 'RSI'])) else None
+        r_rsi = float(recent_chunk.loc[r_min_idx, 'RSI']) if ('RSI' in recent_chunk.columns and not pd.isna(recent_chunk.loc[r_min_idx, 'RSI'])) else None
+        p_obv = float(past_chunk.loc[p_min_idx, 'OBV']) if ('OBV' in past_chunk.columns and not pd.isna(past_chunk.loc[p_min_idx, 'OBV'])) else None
+        r_obv = float(recent_chunk.loc[r_min_idx, 'OBV']) if ('OBV' in recent_chunk.columns and not pd.isna(recent_chunk.loc[r_min_idx, 'OBV'])) else None
 
         if (r_rsi is not None and p_rsi is not None and r_rsi > p_rsi + 2.0) or \
            (r_obv is not None and p_obv is not None and r_obv > p_obv):
@@ -284,41 +284,53 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     regimes_rule = rules.get('regimes', {}).get(regime, {})
 
     if regime == "에너지 응축 (스퀴즈)":
-        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment', '볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다.')}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다. 폭풍 전야의 고요한 상태입니다.')}"
+        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment') or '볼린저 밴드 수축 국면이므로 RSI의 움직임이 매우 둔화되어 있습니다. 방향성 탐색 중입니다.'}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '이동평균선이 밀집하며 MACD도 0선에 완전히 수렴했습니다. 폭풍 전야의 고요한 상태입니다.'}"
     elif regime == "횡보 박스":
         rsi_cfg = regimes_rule.get('rsi_comment', {})
-        if isinstance(rsi_cfg, dict):
-            detail = rsi_cfg.get('oversold') if (not pd.isna(rsi) and rsi <= 40) else (rsi_cfg.get('overbought') if (not pd.isna(rsi) and rsi >= 60) else rsi_cfg.get('neutral'))
+        if isinstance(rsi_cfg, dict) and rsi_cfg:
+            detail = (
+                rsi_cfg.get('oversold') if (not pd.isna(rsi) and rsi <= 40) else (
+                    rsi_cfg.get('overbought') if (not pd.isna(rsi) and rsi >= 60) else rsi_cfg.get('neutral')
+                )
+            ) or "박스권 내에서 방향성을 탐색 중입니다."
         else:
             detail = "박스권 내에서 방향성을 탐색 중입니다."
         comments['RSI'] = f"{rsi_disp}: {detail}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '뚜렷한 추세가 부재한 박스권이므로 MACD 크로스 신호의 신뢰도는 다소 떨어집니다.')}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '뚜렷한 추세가 부재한 박스권이므로 MACD 크로스 신호의 신뢰도는 다소 떨어집니다.'}"
     elif regime == "강세 추세":
         rsi_cfg = regimes_rule.get('rsi_comment', {})
-        if isinstance(rsi_cfg, dict):
-            detail = rsi_cfg.get('overbought') if (not pd.isna(rsi) and rsi >= 70) else (rsi_cfg.get('pullback') if (not pd.isna(rsi) and rsi <= 50) else rsi_cfg.get('neutral'))
+        if isinstance(rsi_cfg, dict) and rsi_cfg:
+            detail = (
+                rsi_cfg.get('overbought') if (not pd.isna(rsi) and rsi >= 70) else (
+                    rsi_cfg.get('pullback') if (not pd.isna(rsi) and rsi <= 50) else rsi_cfg.get('neutral')
+                )
+            ) or "안정적인 상승 탄력을 유지하고 있습니다."
         else:
             detail = "안정적인 상승 탄력을 유지하고 있습니다."
         comments['RSI'] = f"{rsi_disp}: {detail}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '상승 모멘텀이 강하게 유지되며 이평선 정배열 확장을 지지하고 있습니다.')}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '상승 모멘텀이 강하게 유지되며 이평선 정배열 확장을 지지하고 있습니다.'}"
     elif regime == "상승 조정":
-        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment', '상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다.')}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다.')}"
+        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment') or '상승 추세 속에서 조정을 받으며 지표가 식어가고 있습니다. 40~50 부근에서 지지받는지 확인이 필요합니다.'}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '단기적으로 데드크로스가 발생하거나 모멘텀이 둔화되었으나, 장기 상승 추세 베이스는 훼손되지 않았습니다.'}"
     elif regime == "약세 추세":
         rsi_cfg = regimes_rule.get('rsi_comment', {})
-        if isinstance(rsi_cfg, dict):
-            detail = rsi_cfg.get('rebound') if (not pd.isna(rsi) and rsi >= 55) else (rsi_cfg.get('oversold') if (not pd.isna(rsi) and rsi <= 30) else rsi_cfg.get('neutral'))
+        if isinstance(rsi_cfg, dict) and rsi_cfg:
+            detail = (
+                rsi_cfg.get('rebound') if (not pd.isna(rsi) and rsi >= 55) else (
+                    rsi_cfg.get('oversold') if (not pd.isna(rsi) and rsi <= 30) else rsi_cfg.get('neutral')
+                )
+            ) or "지속적인 하락 압력을 받고 있습니다."
         else:
             detail = "지속적인 하락 압력을 받고 있습니다."
         comments['RSI'] = f"{rsi_disp}: {detail}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다.')}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '하락 모멘텀이 강하며, 추세 반전을 암시하는 뚜렷한 신호가 아직 없습니다.'}"
     elif regime == "변동성 폭발":
-        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment', '변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다.')}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '단기 모멘텀이 평소의 범위를 벗어나 급격하게 방향성을 분출하고 있습니다.')}"
+        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment') or '변동성 폭발로 인해 투심이 한쪽으로 극단적으로 쏠리는 오버슈팅 및 투매 국면입니다.'}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '단기 모멘텀이 평소의 범위를 벗어나 급격하게 방향성을 분출하고 있습니다.'}"
     else:
-        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment', '데이터 축적 중으로 지표 신뢰도를 검증 중입니다.')}"
-        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment', '추세 형성 초기 단계입니다.')}"
+        comments['RSI'] = f"{rsi_disp}: {regimes_rule.get('rsi_comment') or '데이터 축적 중으로 지표 신뢰도를 검증 중입니다.'}"
+        comments['MACD'] = f"MACD({macd_diff:,.{decimals}f}): {regimes_rule.get('macd_comment') or '추세 형성 초기 단계입니다.'}"
 
     comments['VOL'] = f"상대 거래량이 평균 대비 **{vol_ratio:.0f}%** 수준입니다. " + ("대량 거래가 터지며 시장의 강한 이목이 집중되었습니다." if vol_ratio > 150 else "평이한 수준의 거래가 이뤄지고 있습니다.")
     comments['OBV'] = f"최근 {obv_lookback}{time_unit}간 누적 수급(OBV)이 **{'상승(자금 유입)' if obv > simple_prev_obv else '하락(자금 이탈)'}** 중입니다."
@@ -415,8 +427,17 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += f"• **상방 돌파 시나리오:** 1차 저항선인 **{res:,.{decimals}f}{md_currency}** 강하게 돌파 시 새로운 상승 추세로 판단, 매수 관점 접근.\n\n"
     ai_op += f"• **하방 방어 시나리오:** 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근, 핵심 지지선은 **{sup:,.{decimals}f}{md_currency}** 입니다. 이탈 시 즉각적 리스크 관리 우선.\n\n"
 
-    if bullish_div and regime != "약세 추세" and not is_falling_knife:
-        ai_op += "🔥 **[상승 다이버전스 포착]** 보조지표의 저점이 상승하는 긍정적 반전 시그널이 확인되었습니다!\n\n"
+    if bullish_div and not is_falling_knife:
+        if regime == "약세 추세":
+            ai_op += "🔥 **[상승 다이버전스 포착]** 하락 추세 속에서 주가는 신저가를 기록했으나, 보조지표 저점이 상승하는 강력한 역발상 반전 시그널이 감지되었습니다!\n\n"
+        else:
+            ai_op += "🔥 **[상승 다이버전스 포착]** 보조지표의 저점이 상승하는 긍정적 반전 시그널이 확인되었습니다!\n\n"
 
     comments['AI'] = f"{ai_op}🎯 **최종 투자 전략 요약:** {strategy} (AI 권장 포지션: **{pos}**)"
+
+    # 텍스트 파싱 의존을 원천 차단하기 위한 원본 불리언 및 레짐 데이터 제공
+    comments['regime_raw'] = regime
+    comments['bullish_div_raw'] = bullish_div
+    comments['is_falling_knife_raw'] = is_falling_knife
+
     return pos, strategy, comments
