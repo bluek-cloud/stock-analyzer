@@ -5,3 +5,4 @@ finance-datareader
 numpy
 beautifulsoup4
 requests
+pyyaml
