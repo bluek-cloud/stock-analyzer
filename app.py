@@ -475,130 +475,259 @@ if app_menu == "📊 단일 종목 심층 분석":
             default_days = 180 if is_short_term else 730 
             cur_price = raw_df['Close'].iloc[-1]
             diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
-            st.subheader(f"📑 {display_name} 리포트")
-            st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
+            # 1. 퀀트 스코어 및 패턴/레벨 산출
             q_score = calculate_quant_score(chart_df, is_short_term)
-            st.write(f"### 💯 퀀트 스코어: **{q_score}점**")
-            st.progress(q_score / 100)
             pts, sup, res = detect_patterns_and_levels(chart_df)
-            if len(chart_df) < 5: st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
+            if len(chart_df) < 5: 
+                st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
             else:
                 try:
                     pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
                 except TypeError:
                     pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish)
-                c1, c2 = st.columns(2)
-                with c1:
-                    with st.container(border=True):
-                        st.markdown("### 🎯 **종합 전략**")
-                        st.warning(f"**포지션:** {pos}\n\n**의견:** {strat}")
-                with c2:
-                    with st.container(border=True):
-                        st.markdown("### 🔍 **지지/저항 레벨**")
-                        md_curr_ui = currency.replace('$', r'\$')
-                        sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "데이터 부족"
-                        res_txt = "✨ 신고가 (저항 없음)" if res == 0 else (f"{res:,.{decimals}f} {md_curr_ui}" if res > 0 else "데이터 부족")
-                        st.write(f"🛡️ **지지선:** {sup_txt} | 🚧 **저항선:** {res_txt}")
-                        if pts:
-                            st.info(f"🕯️ **포착된 캔들 패턴:** {' | '.join(pts)}")
-                with st.expander("🔬 지표별 상세 분석", expanded=True):
+                
+                regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
+                is_falling_knife = comments.get('is_falling_knife_raw', False)
+                bullish_div = comments.get('bullish_div_raw', False)
+
+                # ==========================================
+                # A. [결론 우선] 헤더 & 색상 대응 Hero 포지션 카드
+                # ==========================================
+                st.markdown(f"## 📑 **{display_name}** <span style='font-size:1.05rem; color:#888; font-weight:normal;'>| {analyze_mode}</span>", unsafe_allow_html=True)
+                
+                # 포지션 성격에 따른 동적 테마 색상 결정
+                if any(k in pos for k in ["🔴", "신고가", "강세", "확대", "추세 추종", "적극 매수"]):
+                    theme_color = "#FF4B4B"  # 강세/매수 (레드)
+                    bg_color = "rgba(255, 75, 75, 0.08)"
+                    badge_bg = "#E53935"
+                elif any(k in pos for k in ["🟠", "눌림목", "반등", "선취매", "하단 매수"]):
+                    theme_color = "#FF8C00"  # 눌림목/선취매 (오렌지)
+                    bg_color = "rgba(255, 140, 0, 0.08)"
+                    badge_bg = "#FB8C00"
+                elif any(k in pos for k in ["🔵", "🔷", "투매", "매도", "축소", "위험", "탈출"]):
+                    theme_color = "#1E88E5"  # 매도/하락/투매 (블루)
+                    bg_color = "rgba(30, 136, 229, 0.08)"
+                    badge_bg = "#1976D2"
+                else:
+                    theme_color = "#78909C"  # 관망/중립 (그레이)
+                    bg_color = "rgba(120, 144, 156, 0.08)"
+                    badge_bg = "#607D8B"
+
+                hero_card_html = f"""
+                <div style="border-left: 6px solid {theme_color}; background-color: {bg_color}; padding: 16px 20px; border-radius: 8px; margin: 8px 0 16px 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 0.85rem; font-weight: 700; color: {theme_color}; text-transform: uppercase; letter-spacing: 0.8px;">
+                            🎯 AI 최종 포지션 & 실전 대응 전략
+                        </span>
+                        <span style="background-color: {badge_bg}; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">
+                            {regime_label}
+                        </span>
+                    </div>
+                    <div style="font-size: 1.35rem; font-weight: 800; margin-bottom: 6px;">
+                        {pos}
+                    </div>
+                    <div style="font-size: 1.02rem; line-height: 1.6; opacity: 0.95;">
+                        {strat}
+                    </div>
+                </div>
+                """
+                st.markdown(hero_card_html, unsafe_allow_html=True)
+
+                # ==========================================
+                # B. [핵심 수치 요약] 4분할 탑 메트릭 대시보드
+                # ==========================================
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1:
+                    st.metric("현재 주가", f"{cur_price:,.{decimals}f} {currency}", f"{diff:,.{decimals}f} {currency}")
+
+                with col_m2:
+                    q_label = "🔥 적극 매수권" if q_score >= 75 else ("📈 상승 우세" if q_score >= 55 else ("⚖️ 중립/관망" if q_score >= 40 else "❄️ 침체/위험"))
+                    st.metric("💯 퀀트 스코어", f"{q_score}점 / 100", q_label)
+
+                with col_m3:
+                    if sup > 0:
+                        sup_pct = ((sup - cur_price) / cur_price) * 100
+                        st.metric("🛡️ 핵심 지지선 (손절 기준)", f"{sup:,.{decimals}f} {currency}", f"{sup_pct:+.1f}%")
+                    else:
+                        st.metric("🛡️ 핵심 지지선 (손절 기준)", "데이터 부족", "")
+
+                with col_m4:
+                    if res > 0:
+                        res_pct = ((res - cur_price) / cur_price) * 100
+                        st.metric("🚧 1차 저항선 (목표가)", f"{res:,.{decimals}f} {currency}", f"{res_pct:+.1f}%")
+                    elif res == 0:
+                        st.metric("🚧 1차 저항선 (목표가)", "신고가 (상방 개방)", "저항 없음 ✨")
+                    else:
+                        st.metric("🚧 1차 저항선 (목표가)", "데이터 부족", "")
+
+                # 감지된 핵심 캔들/반전 시그널 칩
+                signal_chips = []
+                if pts:
+                    signal_chips.extend(pts)
+                if bullish_div:
+                    signal_chips.append("🔥 상승 다이버전스 포착")
+                if is_falling_knife:
+                    signal_chips.append("🚨 투매(Falling Knife) 주의")
+                if signal_chips:
+                    chips_html = "".join([f"<span style='background-color: rgba(128,128,128,0.15); padding: 4px 10px; border-radius: 6px; font-size: 0.88rem; margin-right: 6px; font-weight: 500;'>{c}</span>" for c in signal_chips])
+                    st.markdown(f"<div style='margin-bottom: 18px;'><b>포착된 핵심 시그널:</b> {chips_html}</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+                # ==========================================
+                # C. 차트 데이터 준비
+                # ==========================================
+                f_start = max(chart_df.index[0], datetime.now() - timedelta(days=default_days))
+                p_df = chart_df[chart_df.index >= f_start].copy()
+
+                fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.20, 0.25], vertical_spacing=0.03)
+                fig.add_trace(go.Candlestick(x=p_df.index, open=p_df['Open'], high=p_df['High'], low=p_df['Low'], close=p_df['Close'], name='주가'), row=1, col=1)
+                for ma, clr in [('MA20', 'orange'), ('MA60', 'green')]: 
+                    fig.add_trace(go.Scatter(x=p_df.index, y=p_df[ma], name=ma, line=dict(color=clr, width=1)), row=1, col=1)
+                fig.add_trace(go.Scatter(x=p_df.index, y=p_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
+                colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(p_df['Close'], p_df['Open'])]
+                fig.add_trace(go.Bar(x=p_df.index, y=p_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
+                fig.update_layout(height=560, margin=dict(t=10, b=10, l=0, r=0), hovermode='x unified', showlegend=False)
+                fig.update_xaxes(rangeslider=dict(visible=False))
+                if is_short_term:
+                    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+                ofig = None
+                if 'OBV' in p_df.columns:
+                    ofig = go.Figure(data=[go.Scatter(x=p_df.index, y=p_df['OBV'], fill='tozeroy', line=dict(color='purple'))])
+                    ofig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0))
+                    if is_short_term:
+                        ofig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+                # ==========================================
+                # D. [근거는 탭으로 정리] 4대 심층 탭 네비게이션
+                # ==========================================
+                tab_chart, tab_indicator, tab_backtest, tab_rag = st.tabs([
+                    "📈 종합 차트 & 수급",
+                    "🔬 6대 지표 정밀 진단 & 리포트",
+                    "📊 통계적 백테스트 (실전 승률)",
+                    "🧠 월가 AI RAG 심층 리포트"
+                ])
+
+                # --- TAB 1: 차트 및 수급 ---
+                with tab_chart:
+                    c_chart1, c_chart2 = st.tabs(["🕯️ 캔들 & RSI/거래량", "🌊 OBV 누적 자금 흐름"])
+                    with c_chart1:
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                    with c_chart2:
+                        if ofig:
+                            st.plotly_chart(ofig, use_container_width=True)
+                        else:
+                            st.info("OBV 데이터를 불러올 수 없습니다.")
+                    
+                    md_curr_ui = currency.replace('$', r'\$')
+                    sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "데이터 부족"
+                    res_txt = "✨ 신고가 (저항 없음)" if res == 0 else (f"{res:,.{decimals}f} {md_curr_ui}" if res > 0 else "데이터 부족")
+                    st.caption(f"🛡️ **주요 지지선:** {sup_txt} &nbsp;|&nbsp; 🚧 **주요 저항선:** {res_txt}")
+
+                # --- TAB 2: 6대 지표 정밀 진단 & 리포트 ---
+                with tab_indicator:
+                    st.markdown("#### 🔬 6대 보조지표 정밀 진단")
                     desc = {"ADX 추세강도": "ADX: 추세 파워 측정.", "상대 거래량": "Relative Vol: 거래량 비율.", "OBV 누적": "OBV: 세력 매집 지표.", "RSI 강도": "RSI: 과열/침체 수치.", "MACD 흐름": "MACD: 추세 방향 파악.", "ATR 변동성": "ATR: 실질 변동폭."}
                     for label, key in [("ADX 추세강도", "ADX"), ("상대 거래량", "VOL"), ("OBV 누적", "OBV"), ("RSI 강도", "RSI"), ("MACD 흐름", "MACD"), ("ATR 변동성", "ATR")]:
                         cl, cv = st.columns([0.25, 0.75])
                         with cl.popover(label, use_container_width=True): st.info(desc.get(label))
                         cv.markdown(comments.get(key, '데이터 없음'))
                     st.divider()
+                    st.markdown("#### 🤖 StockMap AI 종합 심층 의견")
                     st.info(comments.get('AI'))
-                
-                # ==========================================
-                # 통계적 백테스트 검증 및 종목별 시뮬레이터 카드
-                # ==========================================
-                regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
-                market_ctx_dict = {
-                    'regime': regime_label,
-                    'patterns': pts,
-                    'bullish_div': comments.get('bullish_div_raw', False),
-                    'is_falling_knife': comments.get('is_falling_knife_raw', False),
-                    'is_short_term': is_short_term
-                }
-                matched_key, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
 
-                if matched_stats:
-                    with st.container(border=True):
-                        st.markdown("### 📊 **통계적 백테스트 검증 (Statistical Edge)**")
-                        st.caption(f"💡 현재 감지된 패턴/셋업은 **[{matched_stats['name']}]**에 해당합니다. ({matched_stats['benchmark_note']})")
+                # --- TAB 3: 통계적 백테스트 & 시뮬레이터 ---
+                with tab_backtest:
+                    market_ctx_dict = {
+                        'regime': regime_label,
+                        'patterns': pts,
+                        'bullish_div': bullish_div,
+                        'is_falling_knife': is_falling_knife,
+                        'is_short_term': is_short_term
+                    }
+                    matched_key, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
+
+                    if matched_stats:
+                        st.markdown(f"#### 🎯 감지된 셋업: **[{matched_stats['name']}]**")
+                        st.caption(f"💡 {matched_stats['benchmark_note']}")
                         
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("20거래일 보유 승률", f"{matched_stats['win_rate_20d']}%", f"5일: {matched_stats['win_rate_5d']}%")
-                        m2.metric("손익비 (Profit Factor)", f"{matched_stats['profit_factor']} : 1")
-                        m3.metric("평균 기대 수익률", f"+{matched_stats['avg_return_20d']}%", f"최대 반등: +{matched_stats['avg_mfe']}%")
-                        m4.metric("검증 표본 수", f"{matched_stats['sample_count']:,} 건")
+                        mb1, mb2, mb3, mb4 = st.columns(4)
+                        mb1.metric("20거래일 보유 승률", f"{matched_stats['win_rate_20d']}%", f"5일: {matched_stats['win_rate_5d']}%")
+                        mb2.metric("손익비 (Profit Factor)", f"{matched_stats['profit_factor']} : 1")
+                        mb3.metric("평균 기대 수익률", f"+{matched_stats['avg_return_20d']}%", f"최대 반등: +{matched_stats['avg_mfe']}%")
+                        mb4.metric("검증 표본 수", f"{matched_stats['sample_count']:,} 건")
                         
                         st.info(f"🎯 **실전 통계 가이드:** 권장 손절폭 **-{matched_stats['recommended_sl_pct']}%** | 1차 목표 익절 **+{matched_stats['recommended_tp_pct']}%** (평균 최대 낙폭: -{matched_stats['avg_mae']}%)")
+                        sim_setup_type = matched_key
+                        sim_setup_name = matched_stats['name']
+                    else:
+                        st.info("💡 현재 시점에는 특정 반등 셋업이 감지되지 않았습니다. 하지만 과거 5년 차트의 **유사 기술적 반등 타점 전체(종합)**를 대상으로 승률을 역추적 시뮬레이션할 수 있습니다.")
+                        sim_setup_type = "AUTO"
+                        sim_setup_name = "종합 반등 셋업"
 
-                        # 인터랙티브 종목별 실전 시뮬레이션
-                        with st.expander(f"🎯 이 종목에서의 [{matched_stats['name']}] 과거 실전 승률 즉석 시뮬레이션", expanded=False):
-                            st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 **[{matched_stats['name']}]** 타점이 발생했을 때의 실제 성과를 실시간 계산합니다.")
-                            sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
-                            sim_cache_key = f"sim_{ticker_symbol}_{matched_key}_{is_short_term}"
+                    # 인터랙티브 종목별 실전 시뮬레이션
+                    with st.expander(f"🎯 이 종목에서의 [{sim_setup_name}] 과거 실전 승률 즉석 시뮬레이션", expanded=True):
+                        st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 발생한 실제 타점 성과를 실시간 계산합니다.")
+                        sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
+                        sim_cache_key = f"sim_{ticker_symbol}_{sim_setup_type}_{is_short_term}"
 
-                            if sim_btn:
-                                with st.spinner("⏳ 과거 전체 차트 스캔 및 타점 역추적 시뮬레이션 중..."):
-                                    sim_result = run_stock_backtest(chart_df, setup_type=matched_key, hold_days=20)
-                                    if sim_result.get('total_trades', 0) == 0:
-                                        # 종목 특성상 해당 단독 패턴 표본이 적을 경우 유사 반등 셋업 전체(종합)로 자동 확장
-                                        fallback_sim = run_stock_backtest(chart_df, setup_type="AUTO", hold_days=20)
-                                        if fallback_sim.get('total_trades', 0) > 0:
-                                            fallback_sim['fallback_note'] = f"현재 종목에서는 [{matched_stats['name']}] 단독 표본이 적어, 유사 반등 셋업 전체(종합)로 자동 확장 시뮬레이션했습니다."
-                                            sim_result = fallback_sim
-                                    st.session_state[sim_cache_key] = sim_result
+                        if sim_btn:
+                            with st.spinner("⏳ 과거 전체 차트 스캔 및 타점 역추적 시뮬레이션 중..."):
+                                sim_result = run_stock_backtest(chart_df, setup_type=sim_setup_type, hold_days=20)
+                                if sim_result.get('total_trades', 0) == 0 and sim_setup_type != "AUTO":
+                                    fallback_sim = run_stock_backtest(chart_df, setup_type="AUTO", hold_days=20)
+                                    if fallback_sim.get('total_trades', 0) > 0:
+                                        fallback_sim['fallback_note'] = f"현재 종목에서는 [{sim_setup_name}] 단독 표본이 적어, 유사 반등 셋업 전체(종합)로 자동 확장 시뮬레이션했습니다."
+                                        sim_result = fallback_sim
+                                st.session_state[sim_cache_key] = sim_result
 
-                            if sim_cache_key in st.session_state:
-                                sim_res = st.session_state[sim_cache_key]
-                                if 'error' in sim_res:
-                                    st.warning(sim_res['error'])
-                                elif sim_res.get('total_trades', 0) == 0:
-                                    st.info(sim_res.get('message', '타점이 포착되지 않았습니다.'))
-                                else:
-                                    if 'fallback_note' in sim_res:
-                                        st.caption(f"💡 {sim_res['fallback_note']}")
-                                    sc1, sc2, sc3, sc4 = st.columns(4)
-                                    sc1.metric("과거 총 타점", f"{sim_res['total_trades']} 회")
-                                    sc2.metric("실제 승률", f"{sim_res['win_rate']}%", f"{sim_res['win_trades']}승 {sim_res['loss_trades']}패")
-                                    sc3.metric("평균 수익률", f"{sim_res['avg_return']:+.2f}%")
-                                    sc4.metric("손익비", f"{sim_res['profit_factor']} : 1")
+                        if sim_cache_key in st.session_state:
+                            sim_res = st.session_state[sim_cache_key]
+                            if 'error' in sim_res:
+                                st.warning(sim_res['error'])
+                            elif sim_res.get('total_trades', 0) == 0:
+                                st.info(sim_res.get('message', '타점이 포착되지 않았습니다.'))
+                            else:
+                                if 'fallback_note' in sim_res:
+                                    st.caption(f"💡 {sim_res['fallback_note']}")
+                                sc1, sc2, sc3, sc4 = st.columns(4)
+                                sc1.metric("과거 총 타점", f"{sim_res['total_trades']} 회")
+                                sc2.metric("실제 승률", f"{sim_res['win_rate']}%", f"{sim_res['win_trades']}승 {sim_res['loss_trades']}패")
+                                sc3.metric("평균 수익률", f"{sim_res['avg_return']:+.2f}%")
+                                sc4.metric("손익비", f"{sim_res['profit_factor']} : 1")
 
-                                    if 'recent_trades' in sim_res and sim_res['recent_trades']:
-                                        hold_label = "20거래일" if is_short_term else "20주"
-                                        st.markdown(f"##### 📋 최근 과거 타점 상세 내역 ({hold_label} 보유 기준)")
-                                        trade_rows = []
-                                        for t in sim_res['recent_trades']:
-                                            trade_rows.append({
-                                                '진입일': t['entry_date'],
-                                                '진입가': f"{t['entry_price']:,.{decimals}f} {currency}",
-                                                '청산일': t['exit_date'],
-                                                '청산가': f"{t['exit_price']:,.{decimals}f} {currency}",
-                                                '수익률': f"{t['return_pct']:+.2f}%",
-                                                '최대반등(MFE)': f"+{t['mfe_pct']}%",
-                                                '결과': "✅ 승리" if t['is_win'] else "❌ 패배"
-                                            })
-                                        st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
-                
-                # ==========================================
-                # RAG 기반 월가 수석 애널리스트 심층 리포트 카드
-                # ==========================================
-                with st.container(border=True):
-                    c_rag_l, c_rag_r = st.columns([0.75, 0.25])
-                    with c_rag_l:
-                        st.markdown("### 🧠 **월가 수석 애널리스트 RAG 심층 진단**")
-                        st.caption("전문 트레이딩 지식 베이스(캔들 역학, 볼린저, 다이버전스, 리스크 관리)를 실시간 검색(RAG)하여 Gemini AI가 종합 분석합니다.")
-                    with c_rag_r:
-                        gen_btn = st.button("🚀 AI 심층 리포트 생성", key="btn_rag_report", type="primary", use_container_width=True)
+                                if 'recent_trades' in sim_res and sim_res['recent_trades']:
+                                    hold_label = "20거래일" if is_short_term else "20주"
+                                    st.markdown(f"##### 📋 최근 과거 타점 상세 내역 ({hold_label} 보유 기준)")
+                                    trade_rows = []
+                                    for t in sim_res['recent_trades']:
+                                        trade_rows.append({
+                                            '진입일': t['entry_date'],
+                                            '진입가': f"{t['entry_price']:,.{decimals}f} {currency}",
+                                            '청산일': t['exit_date'],
+                                            '청산가': f"{t['exit_price']:,.{decimals}f} {currency}",
+                                            '수익률': f"{t['return_pct']:+.2f}%",
+                                            '최대반등(MFE)': f"+{t['mfe_pct']}%",
+                                            '결과': "✅ 승리" if t['is_win'] else "❌ 패배"
+                                        })
+                                    st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, hide_index=True)
 
+                # --- TAB 4: 월가 AI RAG 심층 리포트 ---
+                with tab_rag:
+                    st.markdown("#### 🧠 월가 수석 애널리스트 RAG 심층 진단")
+                    st.caption("전문 트레이딩 지식 베이스(캔들 역학, 볼린저, 다이버전스, 리스크 관리)를 실시간 검색(RAG)하여 Gemini AI가 종합 분석합니다.")
+                    
                     rag_cache_key = f"rag_report_{ticker_symbol}_{is_short_term}"
+                    c_btn_l, c_btn_r = st.columns([0.3, 0.7])
+                    with c_btn_l:
+                        gen_btn = st.button("🚀 AI 심층 리포트 생성", key="btn_rag_report", type="primary", use_container_width=True)
+                    with c_btn_r:
+                        if not user_gemini_key:
+                            st.caption("💡 사이드바의 'Gemini AI 설정'에 무료 API Key를 입력하시면 즉시 분석 가능합니다.")
+
                     if gen_btn:
                         with st.spinner("📚 전문 지식 베이스 검색 및 월가 수석 애널리스트 리포트 작성 중..."):
-                            regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
                             stock_info_dict = {
                                 'name': display_name.split(' (')[0],
                                 'code': ticker_symbol,
@@ -616,8 +745,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                             market_ctx_dict = {
                                 'regime': regime_label,
                                 'patterns': pts,
-                                'bullish_div': comments.get('bullish_div_raw', False),
-                                'is_falling_knife': comments.get('is_falling_knife_raw', False),
+                                'bullish_div': bullish_div,
+                                'is_falling_knife': is_falling_knife,
                                 'is_short_term': is_short_term
                             }
                             api_key_to_use = user_gemini_key if user_gemini_key else None
@@ -627,28 +756,6 @@ if app_menu == "📊 단일 종목 심층 분석":
                     if rag_cache_key in st.session_state:
                         st.markdown("---")
                         st.markdown(st.session_state[rag_cache_key])
-                tab1, tab2 = st.tabs(["📈 차트", "📊 수급(OBV)"])
-                f_start = max(chart_df.index[0], datetime.now() - timedelta(days=default_days))
-                p_df = chart_df[chart_df.index >= f_start].copy()
-                with tab1:
-                    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.20, 0.25], vertical_spacing=0.03)
-                    fig.add_trace(go.Candlestick(x=p_df.index, open=p_df['Open'], high=p_df['High'], low=p_df['Low'], close=p_df['Close'], name='주가'), row=1, col=1)
-                    for ma, clr in [('MA20', 'orange'), ('MA60', 'green')]: fig.add_trace(go.Scatter(x=p_df.index, y=p_df[ma], name=ma, line=dict(color=clr, width=1)), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=p_df.index, y=p_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
-                    colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(p_df['Close'], p_df['Open'])]
-                    fig.add_trace(go.Bar(x=p_df.index, y=p_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
-                    fig.update_layout(height=600, margin=dict(t=10, b=10, l=0, r=0), hovermode='x unified', showlegend=False)
-                    fig.update_xaxes(rangeslider=dict(visible=False))
-                    if is_short_term:
-                        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                with tab2:
-                    if 'OBV' in p_df.columns:
-                        ofig = go.Figure(data=[go.Scatter(x=p_df.index, y=p_df['OBV'], fill='tozeroy', line=dict(color='purple'))])
-                        ofig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0))
-                        if is_short_term:
-                            ofig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-                        st.plotly_chart(ofig, use_container_width=True)
     else: 
         st.info("👈 사이드바에서 종목을 검색하여 분석을 시작하세요.")
 
