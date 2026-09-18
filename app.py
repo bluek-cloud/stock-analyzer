@@ -587,17 +587,27 @@ if app_menu == "📊 단일 종목 심층 분석":
                 fig.add_trace(go.Scatter(x=p_df.index, y=p_df['RSI'], name='RSI', line=dict(color='#00BFFF', width=1.5)), row=2, col=1)
                 colors = ['#ff3333' if c >= o else '#3366ff' for c, o in zip(p_df['Close'], p_df['Open'])]
                 fig.add_trace(go.Bar(x=p_df.index, y=p_df['Volume'], name='거래량', marker_color=colors), row=3, col=1)
-                fig.update_layout(height=560, margin=dict(t=10, b=10, l=0, r=0), hovermode='x unified', showlegend=False)
-                fig.update_xaxes(rangeslider=dict(visible=False))
+                fig.update_layout(height=560, margin=dict(t=10, b=10, l=0, r=0), hovermode='x unified', showlegend=False, dragmode=False)
+                fig.update_xaxes(rangeslider=dict(visible=False), fixedrange=True)
+                fig.update_yaxes(fixedrange=True)
                 if is_short_term:
                     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
                 ofig = None
                 if 'OBV' in p_df.columns:
                     ofig = go.Figure(data=[go.Scatter(x=p_df.index, y=p_df['OBV'], fill='tozeroy', line=dict(color='purple'))])
-                    ofig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0))
+                    ofig.update_layout(height=350, margin=dict(t=10, b=10, l=0, r=0), dragmode=False)
+                    ofig.update_xaxes(fixedrange=True)
+                    ofig.update_yaxes(fixedrange=True)
                     if is_short_term:
                         ofig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+                chart_config = {
+                    'displayModeBar': False,
+                    'scrollZoom': False,
+                    'doubleClick': False,
+                    'showAxisDragHandles': False
+                }
 
                 # ==========================================
                 # D. [근거는 탭으로 정리] 4대 심층 탭 네비게이션
@@ -613,10 +623,10 @@ if app_menu == "📊 단일 종목 심층 분석":
                 with tab_chart:
                     c_chart1, c_chart2 = st.tabs(["🕯️ 캔들 & RSI/거래량", "🌊 OBV 누적 자금 흐름"])
                     with c_chart1:
-                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        st.plotly_chart(fig, use_container_width=True, config=chart_config)
                     with c_chart2:
                         if ofig:
-                            st.plotly_chart(ofig, use_container_width=True)
+                            st.plotly_chart(ofig, use_container_width=True, config=chart_config)
                         else:
                             st.info("OBV 데이터를 불러올 수 없습니다.")
                     
