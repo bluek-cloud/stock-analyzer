@@ -27,6 +27,8 @@ if 'search_input' not in st.session_state:
     st.session_state.search_input = ""
 if 'main_menu' not in st.session_state:
     st.session_state.main_menu = "📊 단일 종목 심층 분석"
+if 'nav_target' not in st.session_state:
+    st.session_state.nav_target = None
 
 # 모바일 및 데스크톱 가독성 확대를 위해 글자 포인트 스케일업 스타일 시트 적용
 st.markdown("""
@@ -63,6 +65,11 @@ def on_recent_click(query):
 def on_search_input_change():
     if st.session_state.search_input:
         st.session_state.target_query = st.session_state.search_input
+
+# 포착 종목 클릭 시 단일 종목 분석으로 화면 전환하는 콜백 함수
+def on_go_analysis_click(code):
+    on_recent_click(code)
+    st.session_state.nav_target = "📊 단일 종목 심층 분석"
 
 # ==========================================
 # 2. 공통 데이터 처리 함수 (3중 안전망 KRX 데이터베이스)
@@ -428,6 +435,9 @@ def scan_200_pullback(top_n=200):
 with st.sidebar:
     st.header("📌 메뉴 선택")
     menu_options = ["📊 단일 종목 심층 분석", "💎 세력 매집 급등전야 포착", "🎯 200일선 눌림목 포착"]
+    if st.session_state.get('nav_target'):
+        st.session_state.main_menu = st.session_state.nav_target
+        st.session_state.nav_target = None
     current_menu_idx = menu_options.index(st.session_state.main_menu) if st.session_state.main_menu in menu_options else 0
     app_menu = st.radio("기능을 선택하세요", menu_options, index=current_menu_idx, key="main_menu")
     st.divider()
@@ -954,10 +964,13 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
                     format_func=lambda c: f"{df_results[df_results['code']==c]['name'].iloc[0]} ({c}) - {df_results[df_results['code']==c]['badge'].iloc[0]}"
                 )
             with c_go:
-                if st.button("📊 해당 종목 분석하기", key="btn_go_analysis", use_container_width=True):
-                    on_recent_click(selected_stock)
-                    st.session_state.main_menu = "📊 단일 종목 심층 분석"
-                    st.rerun()
+                st.button(
+                    "📊 해당 종목 분석하기", 
+                    key="btn_go_analysis", 
+                    on_click=on_go_analysis_click, 
+                    args=(selected_stock,), 
+                    use_container_width=True
+                )
 
         else:
             st.warning(f"선택하신 조건({used_mode})에 100% 일치하는 종목이 현재 스캔 범위 내에서 없습니다. 상단의 '⚡ 유망 후보 포착 모드'를 선택하거나 스캔 범위를 넓혀 다시 시도해 보세요.")
