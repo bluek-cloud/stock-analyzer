@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, io, requests
 from llm_analyst import generate_rag_analyst_report
 from backtest_engine import match_current_setup, run_stock_backtest
+from accumulation_scanner import scan_smart_money_stocks, evaluate_stock_accumulation_df
+
 
 # ==========================================
 # 1. 페이지 설정 및 세션 관리 (상태 꼬임 무한루프 버그 패치)
@@ -23,6 +25,8 @@ if 'trigger_search' not in st.session_state:
     st.session_state.trigger_search = False
 if 'search_input' not in st.session_state:
     st.session_state.search_input = ""
+if 'main_menu' not in st.session_state:
+    st.session_state.main_menu = "📊 단일 종목 심층 분석"
 
 # 모바일 및 데스크톱 가독성 확대를 위해 글자 포인트 스케일업 스타일 시트 적용
 st.markdown("""
@@ -81,10 +85,11 @@ def get_krx_data():
                 if not df.empty:
                     df['Code'] = df['Code'].astype(str).str.zfill(6)
                     try:
-                        df[['Code', 'Name', 'Market', 'Marcap']].to_csv(CACHE_FILE, index=False)
+                        cols_save = ['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df.columns else [])
+                        df[cols_save].to_csv(CACHE_FILE, index=False)
                     except Exception:
                         pass
-                    return df[['Code', 'Name', 'Market', 'Marcap']]
+                    return df[['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df.columns else [])]
         except Exception:
             continue
             
@@ -98,11 +103,12 @@ def get_krx_data():
             df_kind['Code'] = df_kind['Code'].astype(str).str.zfill(6)
             df_kind['Market'] = 'KRX'
             df_kind['Marcap'] = 0
+            df_kind['Dept'] = ''
             try:
-                df_kind[['Code', 'Name', 'Market', 'Marcap']].to_csv(CACHE_FILE, index=False)
+                df_kind[['Code', 'Name', 'Market', 'Marcap', 'Dept']].to_csv(CACHE_FILE, index=False)
             except Exception:
                 pass
-            return df_kind[['Code', 'Name', 'Market', 'Marcap']]
+            return df_kind[['Code', 'Name', 'Market', 'Marcap', 'Dept']]
     except Exception:
         pass
 
@@ -111,7 +117,7 @@ def get_krx_data():
         try:
             df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
             df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
-            return df_local[['Code', 'Name', 'Market', 'Marcap']]
+            return df_local
         except Exception:
             pass
 
@@ -126,10 +132,10 @@ def _get_krx_data_safe():
             try:
                 df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
                 df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
-                return df_local[['Code', 'Name', 'Market', 'Marcap']]
+                return df_local
             except Exception:
                 pass
-        return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap'])
+        return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap', 'Dept'])
 
 def parse_query(query):
     raw_query = query.strip()
@@ -417,11 +423,13 @@ def scan_200_pullback(top_n=200):
     return pd.DataFrame(found_stocks)
 
 # ==========================================
-# 4. 사이드바 및 메인 실행 UI (투트랙 메뉴 적용)
+# 4. 사이드바 및 메인 실행 UI (멀티트랙 메뉴 적용)
 # ==========================================
 with st.sidebar:
     st.header("📌 메뉴 선택")
-    app_menu = st.radio("기능을 선택하세요", ["📊 단일 종목 심층 분석", "🎯 200일선 눌림목 포착"])
+    menu_options = ["📊 단일 종목 심층 분석", "💎 세력 매집 급등전야 포착", "🎯 200일선 눌림목 포착"]
+    current_menu_idx = menu_options.index(st.session_state.main_menu) if st.session_state.main_menu in menu_options else 0
+    app_menu = st.radio("기능을 선택하세요", menu_options, index=current_menu_idx, key="main_menu")
     st.divider()
 
 if app_menu == "📊 단일 종목 심층 분석":
@@ -568,6 +576,20 @@ if app_menu == "📊 단일 종목 심층 분석":
                     signal_chips.append("🔥 상승 다이버전스 포착")
                 if is_falling_knife:
                     signal_chips.append("🚨 투매(Falling Knife) 주의")
+                
+                # 💎 세력 매집 징후 체크 (Phase 1~4)
+                try:
+                    accum_info = evaluate_stock_accumulation_df(
+                        chart_df_daily if is_short_term else raw_df,
+                        code=ticker_symbol,
+                        name=display_name.split(' (')[0],
+                        min_accum_candles=1
+                    )
+                    if accum_info:
+                        signal_chips.append(f"💎 세력 매집 감지 ({accum_info['badge']})")
+                except Exception:
+                    pass
+
                 if signal_chips:
                     chips_html = "".join([f"<span style='background-color: rgba(128,128,128,0.15); padding: 4px 10px; border-radius: 6px; font-size: 0.88rem; margin-right: 6px; font-weight: 500;'>{c}</span>" for c in signal_chips])
                     st.markdown(f"<div style='margin-bottom: 18px;'><b>포착된 핵심 시그널:</b> {chips_html}</div>", unsafe_allow_html=True)
@@ -791,6 +813,154 @@ if app_menu == "📊 단일 종목 심층 분석":
                         st.markdown(st.session_state[rag_cache_key])
     else: 
         st.info("👈 사이드바에서 종목을 검색하여 분석을 시작하세요.")
+
+elif app_menu == "💎 세력 매집 급등전야 포착":
+    st.subheader("💎 세력 매집 급등전야 발굴 스캐너")
+    st.markdown("주가 폭등 직전, 바닥권에서 대량 수급과 함께 은밀히 물량을 매집 중인 종목을 **4단계 복합 퀀트 알고리즘**으로 포착합니다.")
+
+    with st.expander("📖 **[필독] 세력 매집 4단계 정밀 알고리즘 기준 상세**", expanded=False):
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.markdown("""
+            **🛡️ Phase 1. 기본 건전성 및 유동성 필터**
+            - **시가총액**: 최소 1,000억 원 이상
+            - **제외 대상**: 관리종목, 투자주의/환기/경고/위험/거래정지 종목
+            - **상품 제외**: ETF, ETN, SPAC(스팩), 리츠(REITs), 우선주 배제
+            - **최소 유동성**: 최근 20영업일 평균 거래대금 10억 원 이상
+
+            **📐 Phase 2. 가격 위치 및 이평선 수렴 조건**
+            - **장기 바닥권**: 현재 종가가 최근 1년(250영업일) 최저가 대비 **+30% 이하** (고점 설거지 패턴 원천 차단)
+            - **이평선 수렴**: 20일선(MA20)과 60일선(MA60) 이격도 **±5% 이내** 극도 밀집 (에너지 응축)
+            - **기간 변동폭 억제**: 최근 20영업일(1개월) 누적 주가 등락률 **-3% ~ +5% 이내** 횡보 (시세 분출 직전)
+            """)
+        with col_p2:
+            st.markdown("""
+            **🌋 Phase 3. 거래량 폭증 및 매집봉 감지**
+            - **평균 거래량 대비**: 최근 20영업일 평균 거래량이 직전 60영업일 평균 대비 **150% 이상** 증가
+            - **매집봉 조건**: 최근 20영업일 이내 아래 조건을 만족하는 일봉이 발생:
+              1. 당일 거래량이 직전 20일 평균 거래량 대비 **300% 이상(3배)** 폭증
+              2. 종가가 시가보다 높거나 같은 양봉(또는 윗꼬리 도지), 장대 음봉 제외
+              3. **가격 방어**: 매집봉 발생 이후 현재까지 종가가 해당 매집봉의 저가를 단 한 번도 하회하지 않을 것
+
+            **🏦 Phase 4. 메이저 수급 가점 (선택적 가중치)**
+            - 최근 20영업일 기준 **외국인 + 기관(사모펀드 포함) 합산 순매수**가 양수(+)인 종목에 `🔥 수급 일치` 배지 부여 및 상위 랭킹 정렬
+            """)
+
+    c_opt1, c_opt2 = st.columns(2)
+    with c_opt1:
+        mode_choice = st.radio("매집봉 정밀도 설정", [
+            "⚡ 유망 후보 포착 모드 (매집봉 1회 이상 - 조기 발굴)",
+            "💎 다이아몬드 엄격 모드 (매집봉 2회 이상 - 정석)"
+        ], index=0, help="다이아몬드 엄격 모드는 20일 내 매집봉이 2회 이상 발생한 정석 종목만 찾으며, 유망 후보 모드는 이제 막 첫 매집봉이 터진 초기 종목까지 포착합니다.")
+        min_accum = 2 if "2회" in mode_choice else 1
+
+    with c_opt2:
+        scope_choice = st.selectbox("스캔 대상 범위 설정 (시가총액 순)", [
+            "시총 상위 300개 (초고속 스캔, 약 15초)",
+            "시총 상위 600개 (권장 스캔, 약 30초)",
+            "시총 1,000억 이상 전종목 (~1,300개, 약 1분)"
+        ], index=1)
+        if "300" in scope_choice:
+            scan_limit = 300
+        elif "600" in scope_choice:
+            scan_limit = 600
+        else:
+            scan_limit = 0
+
+    scan_run_btn = st.button("🚀 세력 매집 스캐너 가동", type="primary", use_container_width=True)
+
+    cache_key = "smart_money_scan_results"
+    if scan_run_btn:
+        krx_df = _get_krx_data_safe()
+        if krx_df.empty:
+            st.error("KRX 종목 데이터를 불러올 수 없습니다.")
+        else:
+            prog_bar = st.progress(0)
+            status_txt = st.empty()
+            with st.spinner("⏳ 세력 매집 알고리즘 고속 병렬 스캔 중..."):
+                res_df = scan_smart_money_stocks(
+                    krx_df, 
+                    scan_scope=scan_limit, 
+                    min_accum_candles=min_accum,
+                    progress_bar=prog_bar,
+                    status_text=status_txt
+                )
+            prog_bar.empty()
+            status_txt.empty()
+            st.session_state[cache_key] = res_df
+            st.session_state["smart_money_mode_used"] = mode_choice
+
+    if cache_key in st.session_state:
+        df_results = st.session_state[cache_key]
+        used_mode = st.session_state.get("smart_money_mode_used", "")
+        st.divider()
+        if not df_results.empty:
+            smart_count = len(df_results[df_results['has_smart_money']])
+            st.success(f"🎉 **총 {len(df_results)}개**의 세력 매집 유력 종목이 포착되었습니다! (이 중 **{smart_count}개** 종목은 외인+기관 메이저 수급까지 일치)")
+
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("총 포착 종목", f"{len(df_results)} 개")
+            with m2:
+                st.metric("🔥 수급 일치 종목", f"{smart_count} 개")
+            with m3:
+                avg_vol_g = df_results['vol_growth'].mean()
+                st.metric("평균 거래량 증가율", f"+{avg_vol_g:.1f}%")
+            with m4:
+                avg_low_p = df_results['pct_from_low'].mean()
+                st.metric("평균 1년 저가대비", f"+{avg_low_p:.1f}%")
+
+            # 테이블 표시용 복사본
+            display_df = df_results.copy()
+            display_df = display_df.rename(columns={
+                'badge': '수급 판정',
+                'name': '종목명',
+                'code': '종목코드',
+                'current_price': '현재가',
+                'pct_from_low': '1년저가대비',
+                'ma_disp': '이평이격',
+                'cum_ret': '20일등락률',
+                'vol_growth': '거래량증가율',
+                'accum_dates_str': '매집봉 일자(폭증률)',
+                'frgn_sum': '외인순매수(20일)',
+                'inst_sum': '기관순매수(20일)',
+                'total_smart_money': '합산순매수'
+            })
+
+            display_df['현재가'] = display_df['현재가'].apply(lambda x: f"{x:,} 원")
+            display_df['1년저가대비'] = display_df['1년저가대비'].apply(lambda x: f"+{x:.1f}%")
+            display_df['이평이격'] = display_df['이평이격'].apply(lambda x: f"{x:.1f}%")
+            display_df['20일등락률'] = display_df['20일등락률'].apply(lambda x: f"{x:+.1f}%")
+            display_df['거래량증가율'] = display_df['거래량증가율'].apply(lambda x: f"{x:.0f}%")
+            display_df['외인순매수(20일)'] = display_df['외인순매수(20일)'].apply(lambda x: f"{x:+,} 주")
+            display_df['기관순매수(20일)'] = display_df['기관순매수(20일)'].apply(lambda x: f"{x:+,} 주")
+            display_df['합산순매수'] = display_df['합산순매수'].apply(lambda x: f"{x:+,} 주")
+
+            cols_order = [
+                '수급 판정', '종목명', '종목코드', '현재가',
+                '1년저가대비', '이평이격', '20일등락률', '거래량증가율',
+                '매집봉 일자(폭증률)', '합산순매수', '외인순매수(20일)', '기관순매수(20일)'
+            ]
+            st.dataframe(display_df[cols_order], use_container_width=True, hide_index=True)
+
+            # 포착 종목 즉시 정밀 진단 이동 편의 기능
+            st.markdown("#### 🔎 포착 종목 6대 지표 & 종합 차트 즉시 열람")
+            st.caption("선택한 종목의 정밀 차트와 AI 전략 의견, 백테스트 승률을 바로 조회합니다.")
+            c_sel, c_go = st.columns([0.75, 0.25])
+            with c_sel:
+                selected_stock = st.selectbox(
+                    "종목 선택",
+                    options=df_results['code'].tolist(),
+                    format_func=lambda c: f"{df_results[df_results['code']==c]['name'].iloc[0]} ({c}) - {df_results[df_results['code']==c]['badge'].iloc[0]}"
+                )
+            with c_go:
+                if st.button("📊 해당 종목 분석하기", key="btn_go_analysis", use_container_width=True):
+                    on_recent_click(selected_stock)
+                    st.session_state.main_menu = "📊 단일 종목 심층 분석"
+                    st.rerun()
+
+        else:
+            st.warning(f"선택하신 조건({used_mode})에 100% 일치하는 종목이 현재 스캔 범위 내에서 없습니다. 상단의 '⚡ 유망 후보 포착 모드'를 선택하거나 스캔 범위를 넓혀 다시 시도해 보세요.")
 
 elif app_menu == "🎯 200일선 눌림목 포착":
     st.subheader("🎯 200일선 철벽 방어 우량주 스캐너")
