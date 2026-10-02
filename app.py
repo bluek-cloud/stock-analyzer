@@ -769,6 +769,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                     with st.expander(f"🎯 이 종목에서의 [{sim_setup_name}] 과거 실전 승률 즉석 시뮬레이션", expanded=True):
                         st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 발생한 실제 타점 성과를 실시간 계산합니다.")
                         last_date_str = str(chart_df.index[-1].date()) if hasattr(chart_df.index[-1], 'date') else str(chart_df.index[-1])[:10]
+                        sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
                         sim_cache_key = f"sim_{ticker_symbol}_{sim_setup_type}_{is_short_term}_{last_date_str}"
 
                         if sim_btn:
