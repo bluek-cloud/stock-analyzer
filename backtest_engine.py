@@ -96,9 +96,12 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
     if 'RSI' not in df.columns:
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0)
-        loss = -delta.where(delta < 0, 0.0)
-        rs = gain.ewm(alpha=1/14, adjust=False).mean() / (loss.ewm(alpha=1/14, adjust=False).mean() + 1e-10)
-        df['RSI'] = 100 - (100 / (1 + rs))
+        avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+        both_zero = (avg_gain == 0) & (avg_loss == 0)
+        rs = avg_gain / (avg_loss + 1e-10)
+        rsi = 100 - (100 / (1 + rs))
+        df['RSI'] = rsi.mask(both_zero, 50.0)
 
     signals = []
     # 과거 전체 봉 순회 (hold_days 전까지만 진입 가능)
@@ -124,7 +127,7 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
             prev_body = abs(prev_open - prev_close)
             cur_body = abs(cur_close - cur_open)
             if prev_close < prev_open and cur_close > cur_open:
-                if cur_open <= prev_open and cur_close > prev_open and cur_body >= prev_body:
+                if cur_open <= prev_close and cur_close >= prev_open and cur_body >= prev_body:
                     matched = True
 
         # 3. 망치형 캔들

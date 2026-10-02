@@ -145,7 +145,12 @@ def _get_krx_data_safe():
         return pd.DataFrame(columns=['Code', 'Name', 'Market', 'Marcap', 'Dept'])
 
 def parse_query(query):
+    if not query:
+        return "", "", "", "원", 0
     raw_query = query.strip()
+    if not raw_query:
+        return "", "", "", "원", 0
+
     query_upper = raw_query.upper()
     query_nospace = query_upper.replace(' ', '')
     is_korean = any('\uac00' <= char <= '\ud7a3' for char in raw_query)
@@ -160,26 +165,47 @@ def parse_query(query):
                 return f"{matched.iloc[0]['Name']} ({query_upper})", query_upper, raw_query, "원", 0
         return f"국내 종목 ({query_upper})", query_upper, raw_query, "원", 0
         
-    # 2. 국내 종목명 매칭 (완전일치 -> 공백제거일치 -> 접두사일치 -> 부분일치)
+    # 2. 한글이 포함된 경우 (국내 종목 검색 우선)
+    if is_korean:
+        if not krx_df.empty:
+            matched = krx_df[krx_df['Name'].str.upper() == query_upper]
+            if matched.empty:
+                matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper() == query_nospace]
+            if matched.empty and len(query_nospace) >= 2:
+                matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper().str.startswith(query_nospace)]
+            if matched.empty and len(query_nospace) >= 2:
+                matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper().str.contains(query_nospace, regex=False)]
+            if not matched.empty:
+                code = matched.iloc[0]['Code']
+                name = matched.iloc[0]['Name']
+                return f"{name} ({code})", code, raw_query, "원", 0
+        return f"{raw_query} (국내 종목 미확인)", raw_query, raw_query, "원", 0
+
+    # 3. 영문/기호 입력 시 국내 종목명 '완전 일치' 우선 확인 (예: SK, LG, OCI 등)
     if not krx_df.empty:
         matched = krx_df[krx_df['Name'].str.upper() == query_upper]
         if matched.empty:
             matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper() == query_nospace]
-        if matched.empty:
-            matched = krx_df[krx_df['Name'].str.upper().str.startswith(query_upper)]
-        if matched.empty and len(query_upper) >= 2:
-            matched = krx_df[krx_df['Name'].str.upper().str.contains(query_upper, regex=False)]
-            
         if not matched.empty:
             code = matched.iloc[0]['Code']
             name = matched.iloc[0]['Name']
             return f"{name} ({code})", code, raw_query, "원", 0
 
-    # 3. 한글이 포함된 경우 (절대 해외로 보내지 않음)
-    if is_korean:
-        return f"{raw_query} (국내 종목 미확인)", raw_query, raw_query, "원", 0
+    # 4. 순수 영문 1~5글자는 해외 티커(AAPL, TSLA, SO, NVDA 등)로 우선 처리 (국내 접두사 오매칭 차단)
+    if query_upper.isalpha() and 1 <= len(query_upper) <= 5:
+        return f"{query_upper} (해외)", query_upper, raw_query, "$", 2
 
-    # 4. 영문 티커 (해외 주식)
+    # 5. 영문 6글자 이상인 경우 국내 부분 일치 시도 (예: HYUNDAI 등)
+    if not krx_df.empty and len(query_nospace) >= 2:
+        matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper().str.startswith(query_nospace)]
+        if matched.empty:
+            matched = krx_df[krx_df['Name'].str.replace(' ', '').str.upper().str.contains(query_nospace, regex=False)]
+        if not matched.empty:
+            code = matched.iloc[0]['Code']
+            name = matched.iloc[0]['Name']
+            return f"{name} ({code})", code, raw_query, "원", 0
+
+    # 6. 기본 해외 주식
     return f"{query_upper} (해외)", query_upper, raw_query, "$", 2
 
 @st.cache_data(ttl=60)
@@ -208,9 +234,10 @@ def calculate_indicators(df):
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-    
+    both_zero = (avg_gain == 0) & (avg_loss == 0)
     rs = avg_gain / (avg_loss + 1e-10)
-    df['RSI'] = 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    df['RSI'] = rsi.mask(both_zero, 50.0)
     
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
@@ -293,10 +320,12 @@ def detect_patterns_and_levels(df):
     # 2. 장악형 패턴 정밀 판정 (상승 장악형 / 하락 장악형)
     prev_body = abs(prev['Open'] - prev['Close'])
     if prev['Close'] < prev['Open'] and latest['Close'] > latest['Open']:  # 전일 음봉, 당일 양봉
-        if latest['Open'] <= prev['Open'] and latest['Close'] > prev['Open'] and body >= prev_body:
+        # 당일 시가가 전일 종가(음봉 하단) 이하이고, 당일 종가가 전일 시가(음봉 상단) 이상
+        if latest['Open'] <= prev['Close'] and latest['Close'] >= prev['Open'] and body >= prev_body:
             patterns.append("🚀 상승 장악형 (추세 반전)")
     elif prev['Close'] > prev['Open'] and latest['Close'] < latest['Open']:  # 전일 양봉, 당일 음봉
-        if latest['Open'] >= prev['Open'] and latest['Close'] < prev['Open'] and body >= prev_body:
+        # 당일 시가가 전일 종가(양봉 상단) 이상이고, 당일 종가가 전일 시가(양봉 하단) 이하
+        if latest['Open'] >= prev['Close'] and latest['Close'] <= prev['Open'] and body >= prev_body:
             patterns.append("🚨 하락 장악형 (하락 반전 경고)")
     
     # 3. 지지선 / 저항선 및 신고가 산출 (최대 250거래일 기준)
@@ -346,7 +375,7 @@ def detect_patterns_and_levels(df):
         support = valid_sups[0]['center']
     else:
         below_lows = past_df[past_df['Low'] <= cur_price]['Low']
-        support = below_lows.max() if not below_lows.empty else past_df['Low'].min()
+        support = below_lows.max() if not below_lows.empty else 0
 
     # 저항선 산출: 현재가 초과 클러스터 중 현재가에 가장 가까운 저항 레벨
     res_clusters = cluster_levels(resistance_candidates)
@@ -464,15 +493,21 @@ if app_menu == "📊 단일 종목 심층 분석":
 
     if st.session_state.target_query:
         display_name, ticker_symbol, raw_query, currency, decimals = parse_query(st.session_state.target_query)
-        if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
-            st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
-            st.session_state.recent_searches = st.session_state.recent_searches[:5]
-        with st.spinner(f"📡 '{display_name}' 분석 중..."):
-            try:
-                raw_df = get_stock_data(ticker_symbol)
-            except Exception:
-                raw_df = pd.DataFrame()
-        if raw_df.empty: st.error("⚠️ 데이터를 불러올 수 없습니다. 종목명/코드를 확인하거나, 잠시 후 다시 시도해 주세요. (데이터 서버 일시 장애 가능성)")
+        if not ticker_symbol:
+            st.warning("⚠️ 올바른 종목명 또는 티커를 입력해 주세요.")
+            raw_df = pd.DataFrame()
+        else:
+            if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
+                st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
+                st.session_state.recent_searches = st.session_state.recent_searches[:5]
+            with st.spinner(f"📡 '{display_name}' 분석 중..."):
+                try:
+                    raw_df = get_stock_data(ticker_symbol)
+                except Exception:
+                    raw_df = pd.DataFrame()
+        if raw_df.empty: 
+            if ticker_symbol:
+                st.error("⚠️ 데이터를 불러올 수 없습니다. 종목명/코드를 확인하거나, 잠시 후 다시 시도해 주세요. (데이터 서버 일시 장애 가능성)")
         else:
             is_short_term = "단기" in analyze_mode
             time_unit = "일" if is_short_term else "주"
@@ -499,10 +534,7 @@ if app_menu == "📊 단일 종목 심층 분석":
             if len(chart_df) < 5: 
                 st.warning("분석에 필요한 데이터가 부족합니다 (최소 5거래일 이상 필요).")
             else:
-                try:
-                    pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
-                except TypeError:
-                    pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, weekly_bullish)
+                pos, strat, comments = generate_detailed_opinions(chart_df, sup, res, currency, decimals, is_short_term, time_unit, q_score, pts, weekly_bullish)
                 
                 regime_label = comments.get('regime_raw', comments.get('ADX', '').split('[')[-1].split(']')[0] if '[' in comments.get('ADX', '') else '횡보')
                 is_falling_knife = comments.get('is_falling_knife_raw', False)
@@ -566,6 +598,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                     if sup > 0:
                         sup_pct = ((sup - cur_price) / cur_price) * 100
                         st.metric("🛡️ 핵심 지지선 (손절 기준)", f"{sup:,.{decimals}f} {currency}", f"{sup_pct:+.1f}%")
+                    elif sup == 0:
+                        st.metric("🛡️ 핵심 지지선 (손절 기준)", "신저가 (하방 개방)", "지지선 미확인 ⚠️")
                     else:
                         st.metric("🛡️ 핵심 지지선 (손절 기준)", "데이터 부족", "")
 
@@ -663,7 +697,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                             st.info("OBV 데이터를 불러올 수 없습니다.")
                     
                     md_curr_ui = currency.replace('$', r'\$')
-                    sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "데이터 부족"
+                    sup_txt = f"{sup:,.{decimals}f} {md_curr_ui}" if sup > 0 else "⚠️ 신저가 (지지선 미확인)"
                     res_txt = "✨ 신고가 (저항 없음)" if res == 0 else (f"{res:,.{decimals}f} {md_curr_ui}" if res > 0 else "데이터 부족")
                     st.caption(f"🛡️ **주요 지지선:** {sup_txt} &nbsp;|&nbsp; 🚧 **주요 저항선:** {res_txt}")
 
@@ -734,8 +768,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                     # 인터랙티브 종목별 실전 시뮬레이션
                     with st.expander(f"🎯 이 종목에서의 [{sim_setup_name}] 과거 실전 승률 즉석 시뮬레이션", expanded=True):
                         st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 발생한 실제 타점 성과를 실시간 계산합니다.")
-                        sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
-                        sim_cache_key = f"sim_{ticker_symbol}_{sim_setup_type}_{is_short_term}"
+                        last_date_str = str(chart_df.index[-1].date()) if hasattr(chart_df.index[-1], 'date') else str(chart_df.index[-1])[:10]
+                        sim_cache_key = f"sim_{ticker_symbol}_{sim_setup_type}_{is_short_term}_{last_date_str}"
 
                         if sim_btn:
                             with st.spinner("⏳ 과거 전체 차트 스캔 및 타점 역추적 시뮬레이션 중..."):
@@ -783,7 +817,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                     st.markdown("#### 🧠 월가 수석 애널리스트 RAG 심층 진단")
                     st.caption("전문 트레이딩 지식 베이스(캔들 역학, 볼린저, 다이버전스, 리스크 관리)를 실시간 검색(RAG)하여 Gemini AI가 종합 분석합니다.")
                     
-                    rag_cache_key = f"rag_report_{ticker_symbol}_{is_short_term}"
+                    rag_cache_key = f"rag_report_{ticker_symbol}_{is_short_term}_{last_date_str}"
                     c_btn_l, c_btn_r = st.columns([0.3, 0.7])
                     with c_btn_l:
                         gen_btn = st.button("🚀 AI 심층 리포트 생성", key="btn_rag_report", type="primary", use_container_width=True)
@@ -870,9 +904,9 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
             "시총 상위 600개 (권장 스캔, 약 30초)",
             "시총 1,000억 이상 전종목 (~1,300개, 약 1분)"
         ], index=1)
-        if "300" in scope_choice:
+        if "상위 300개" in scope_choice:
             scan_limit = 300
-        elif "600" in scope_choice:
+        elif "상위 600개" in scope_choice:
             scan_limit = 600
         else:
             scan_limit = 0
@@ -977,7 +1011,7 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
 
 elif app_menu == "🎯 200일선 눌림목 포착":
     st.subheader("🎯 200일선 철벽 방어 우량주 스캐너")
-    st.markdown("외국인과 기관이 방어하는 1등 주식의 '최후의 보루'를 찾아냅니다.")
+    st.markdown("대형 우량주의 장기 우상향 추세(MA200) 속 200일선 핵심 지지 및 5일선 골든크로스 반등 종목을 찾아냅니다.")
     scan_lim = st.selectbox("스캔 범위 설정 (시총 상위)", [100, 200, 300], index=1)
     if st.button("🚀 스캐너 작동", type="primary", use_container_width=True):
         res_df = scan_200_pullback(top_n=scan_lim)

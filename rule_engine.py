@@ -439,7 +439,10 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += "• **상방 추세 시나리오:** 저항 없는 신고가 상태입니다. 추세 꺾임 시까지 수익 극대화 관점.\n\n"
     else:
         ai_op += f"• **상방 돌파 시나리오:** 1차 저항선인 **{res:,.{decimals}f}{md_currency}** 강하게 돌파 시 새로운 상승 추세로 판단, 매수 관점 접근.\n\n"
-    ai_op += f"• **하방 방어 시나리오:** 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근, 핵심 지지선은 **{sup:,.{decimals}f}{md_currency}** 입니다. 이탈 시 즉각적 리스크 관리 우선.\n\n"
+    if sup > 0:
+        ai_op += f"• **하방 방어 시나리오:** 기계적 손절 라인은 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근, 핵심 지지선은 **{sup:,.{decimals}f}{md_currency}** 입니다. 이탈 시 즉각적 리스크 관리 우선.\n\n"
+    else:
+        ai_op += f"• **하방 방어 시나리오:** 과거 1년 매물대를 하회한 신저가 영역(지지선 미확인)입니다. 기계적 손절 라인 **{max(0, close - atr):,.{decimals}f}{md_currency}** 부근을 기준으로 리스크 관리를 최우선하십시오.\n\n"
 
     if bullish_div and not is_falling_knife:
         if regime == "약세 추세":
