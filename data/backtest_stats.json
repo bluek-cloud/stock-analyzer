@@ -11,7 +11,9 @@
     "avg_mae": 3.6,
     "recommended_sl_pct": 3.8,
     "recommended_tp_pct": 8.5,
-    "benchmark_note": "코스피/코스닥 대형주 5개년(2019~2024) 표본 기준"
+    "benchmark_note": "코스피/코스닥 대형주 5개년(2019~2024) 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   },
   "BOLLINGER_SQUEEZE_BREAKOUT": {
     "name": "볼린저 밴드 스퀴즈 상방 돌파",
@@ -25,7 +27,9 @@
     "avg_mae": 4.2,
     "recommended_sl_pct": 4.5,
     "recommended_tp_pct": 12.0,
-    "benchmark_note": "코스피200 및 나스닥100 5개년 표본 기준"
+    "benchmark_note": "코스피200 및 나스닥100 5개년 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   },
   "BULLISH_DIVERGENCE": {
     "name": "RSI/OBV 상승 다이버전스",
@@ -39,7 +43,9 @@
     "avg_mae": 3.9,
     "recommended_sl_pct": 4.0,
     "recommended_tp_pct": 8.0,
-    "benchmark_note": "국내 주요 상장 종목 5개년 표본 기준"
+    "benchmark_note": "국내 주요 상장 종목 5개년 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   },
   "BULLISH_ENGULFING": {
     "name": "상승 장악형 캔들 반전",
@@ -53,7 +59,9 @@
     "avg_mae": 3.5,
     "recommended_sl_pct": 3.5,
     "recommended_tp_pct": 7.0,
-    "benchmark_note": "코스피 전 종목 5개년 표본 기준"
+    "benchmark_note": "코스피 전 종목 5개년 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   },
   "HAMMER_BOTTOM": {
     "name": "바닥권 망치형 캔들 (Pinbar)",
@@ -67,7 +75,9 @@
     "avg_mae": 3.4,
     "recommended_sl_pct": 3.5,
     "recommended_tp_pct": 6.8,
-    "benchmark_note": "국내 대형주 및 중형주 5개년 표본 기준"
+    "benchmark_note": "국내 대형주 및 중형주 5개년 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   },
   "BOX_BREAKOUT": {
     "name": "횡보 박스권 상단 거래량 돌파",
@@ -81,6 +91,8 @@
     "avg_mae": 4.1,
     "recommended_sl_pct": 4.2,
     "recommended_tp_pct": 10.5,
-    "benchmark_note": "코스피200 및 코스닥150 5개년 표본 기준"
+    "benchmark_note": "코스피200 및 코스닥150 5개년 표본 기준",
+    "verification_status": "unverified",
+    "verification_note": "원본 거래 내역 및 생성 프로그램 미확인. 화면 및 AI 리포트 인용 금지."
   }
 }
