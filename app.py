@@ -499,16 +499,18 @@ if app_menu == "📊 단일 종목 심층 분석":
             if {'query': raw_query, 'display_name': display_name} not in st.session_state.recent_searches:
                 st.session_state.recent_searches.insert(0, {'query': raw_query, 'display_name': display_name})
                 st.session_state.recent_searches = st.session_state.recent_searches[:5]
+            data_val_error = False
             with st.spinner(f"📡 '{display_name}' 분석 중..."):
                 try:
                     raw_df = get_stock_data(ticker_symbol)
                 except ValueError as exc:
+                    data_val_error = True
                     st.error(f"시세 데이터 검증 실패: {exc}")
                     raw_df = pd.DataFrame()
                 except Exception:
                     raw_df = pd.DataFrame()
         if raw_df.empty: 
-            if ticker_symbol:
+            if ticker_symbol and not data_val_error:
                 st.error("⚠️ 데이터를 불러올 수 없습니다. 종목명/코드를 확인하거나, 잠시 후 다시 시도해 주세요. (데이터 서버 일시 장애 가능성)")
         else:
             if raw_df.attrs.get('rounding_adjusted_bars', 0):
@@ -532,6 +534,8 @@ if app_menu == "📊 단일 종목 심층 분석":
             default_days = 180 if is_short_term else 730 
             cur_price = raw_df['Close'].iloc[-1]
             diff = cur_price - raw_df['Close'].iloc[-2] if len(raw_df) > 1 else 0
+            last_date_str = str(chart_df.index[-1].date()) if hasattr(chart_df.index[-1], 'date') else str(chart_df.index[-1])[:10]
+            data_fingerprint = str(int(pd.util.hash_pandas_object(chart_df, index=True).sum()))
             # 1. 퀀트 스코어 및 패턴/레벨 산출
             q_score = calculate_quant_score(chart_df, is_short_term)
             pts, sup, res = detect_patterns_and_levels(chart_df)

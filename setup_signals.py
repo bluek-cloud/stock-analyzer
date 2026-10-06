@@ -18,7 +18,8 @@ def normalize_price_data(df):
 
     Integer adjusted prices may put a close one unit outside the reported
     high/low. Allow at most one unit (0.01 for fractional quotes), also capped
-    at 0.01% of the price. Never change the open, close or volume.
+    at 0.1% of the price (supporting 1-won rounding for quotes >= 1,000 KRW).
+    Never change the open, close or volume.
     """
     required = ["Open", "High", "Low", "Close", "Volume"]
     if not set(required).issubset(df.columns):
@@ -36,7 +37,7 @@ def normalize_price_data(df):
             or (prices <= 0).any().any() or (out["Volume"] < 0).any()):
         raise ValueError("가격 또는 거래량에 결측값·비정상 값이 있습니다.")
     integral = prices.eq(np.floor(prices)).all(axis=1)
-    tolerance = np.minimum(np.where(integral, 1., .01), prices.min(axis=1) * .0001)
+    tolerance = np.minimum(np.where(integral, 1., .01), prices.min(axis=1) * .001)
     body_high = out[['Open', 'Close']].max(axis=1)
     body_low = out[['Open', 'Close']].min(axis=1)
     high_gap = body_high - out['High']

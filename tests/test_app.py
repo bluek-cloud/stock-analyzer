@@ -63,6 +63,29 @@ class AppTests(unittest.TestCase):
         at.run()
         self.assertFalse(at.exception)
         self.assertTrue(at.error)
+        self.assertEqual(len(at.error), 1)
+        self.assertIn("시세 데이터 검증 실패", at.error[0].value)
+
+    def test_doosan_name_search_handles_historical_rounding(self):
+        self.data[['Open', 'High', 'Low', 'Close']] *= 200
+        self.data.loc[self.data.index[100], ['Open', 'High', 'Low', 'Close']] = [20462, 20896, 20413, 20897]
+        at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=30).run()
+        at.text_input(key='search_input').set_value('두산에너빌리티').run()
+        self.assertFalse(at.exception)
+        self.assertFalse(at.error)
+        self.assertTrue(any('반올림' in item.value for item in at.caption))
+        self.assertTrue(at.button(key='btn_run_sim'))
+
+    def test_failed_scan_is_not_reported_as_no_matches(self):
+        at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=30).run()
+        at.radio(key='main_menu').set_value('💎 세력 매집 급등전야 포착').run()
+        result = pd.DataFrame()
+        result.attrs['scan_summary'] = {'total': 2, 'succeeded': 0, 'failed': 2,
+                                        'errors': [{'종목명': 'Example', '오류': 'ConnectionError'}]}
+        at.session_state['smart_money_scan_results_v2'] = result
+        at.run()
+        self.assertFalse(at.exception)
+        self.assertTrue(any('판단할 수 없습니다' in item.value for item in at.error))
 
 
 if __name__ == "__main__":

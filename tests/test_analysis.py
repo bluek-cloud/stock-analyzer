@@ -6,7 +6,7 @@ import pandas as pd
 
 import backtest_engine as bt
 import accumulation_scanner as scanner
-from setup_signals import build_setup_signals, current_setups, bullish_divergence_at, prepare_setup_data
+from setup_signals import build_setup_signals, current_setups, bullish_divergence_at, prepare_setup_data, normalize_price_data
 
 
 def prices(n=250):
@@ -22,6 +22,37 @@ def breakout():
 
 
 class SetupTests(unittest.TestCase):
+    def test_doosan_one_won_rounding_is_normalized_without_changing_close(self):
+        d = prices(100) * 200
+        d.loc[d.index[30], ['Open', 'High', 'Low', 'Close', 'Volume']] = [20462, 20896, 20413, 20897, 4639028]
+        result = normalize_price_data(d)
+        self.assertEqual(result.iloc[30]['High'], 20897)
+        self.assertEqual(result.iloc[30]['Close'], d.iloc[30]['Close'])
+        self.assertEqual(d.iloc[30]['High'], 20896)
+        self.assertEqual(result.attrs['rounding_adjusted_bars'], 1)
+        self.assertNotIn('error', bt.run_stock_backtest(d))
+
+    def test_mid_and_low_cap_one_won_rounding_is_normalized(self):
+        d = prices(100) * 50
+        d.loc[d.index[30], ['Open', 'High', 'Low', 'Close', 'Volume']] = [4900, 5000, 4850, 5001, 100000]
+        result = normalize_price_data(d)
+        self.assertEqual(result.iloc[30]['High'], 5001)
+        self.assertEqual(result.attrs['rounding_adjusted_bars'], 1)
+
+    def test_large_and_low_price_inconsistencies_still_fail(self):
+        for close, high in [(20897, 20890), (100, 99), (1., .99)]:
+            d = prices(100)
+            d.loc[d.index[30], ['Open', 'High', 'Low', 'Close']] = [high, high, high*.99, close]
+            with self.assertRaises(ValueError):
+                normalize_price_data(d)
+
+    def test_suspended_zero_ohl_is_flat_close_and_never_a_signal(self):
+        d = prices()
+        d.loc[d.index[-1], ['Open', 'High', 'Low', 'Volume']] = 0
+        clean = normalize_price_data(d)
+        self.assertTrue(clean.iloc[-1][['Open', 'High', 'Low', 'Close']].eq(100).all())
+        self.assertEqual(current_setups(d), [])
+
     def test_regime_or_pattern_text_does_not_prove_a_setup(self):
         for regime in ("強勢", "강세 추세", "횡보 박스", "변동성 폭발", "에너지 응축 (스퀴즈)"):
             self.assertEqual(bt.match_current_setup({"regime": regime, "bullish_div": True}, ["상승 장악형"]), (None, None))
@@ -126,6 +157,45 @@ class SetupTests(unittest.TestCase):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_company_names_are_not_mistaken_for_fund_brands(self):
+        d = pd.DataFrame({'Code': ['000010', '000020', '000030', '000040', '005935'],
+                          'Name': ['파워로직스', 'YG PLUS', '성우', 'ACE 200', '삼성전자우'], 'Marcap': [1e11]*5})
+        self.assertEqual({r['Name'] for r in scanner.filter_universe_candidates(d)}, {'파워로직스', 'YG PLUS', '성우'})
+
+    def test_strict_mode_is_no_looser_than_candidate_mode(self):
+        d = prices(120)
+        d['Volume'] = 20_000_000.
+        for rise in (0., 8., 11.):
+            close = np.r_[np.full(100, 100.), np.linspace(100., 100.+rise, 20)]
+            d['Close'], d['Open'], d['High'], d['Low'] = close, close, close+1, close-1
+            d.loc[d.index[-10], 'Volume'] = 100_000_000.
+            d.loc[d.index[-5], 'Volume'] = 100_000_000.
+            candidate = scanner.evaluate_stock_accumulation_df(d, min_accum_candles=1, check_investor=False)
+            strict = scanner.evaluate_stock_accumulation_df(d, min_accum_candles=2, check_investor=False)
+            self.assertIsNotNone(candidate)
+            if rise > 10:
+                self.assertIsNone(strict)
+            else:
+                self.assertIsNotNone(strict)
+
+    def test_scan_counts_failures_separately_from_no_matches(self):
+        universe = pd.DataFrame({'Code': ['000010', '000020'], 'Name': ['ExampleA', 'ExampleB'], 'Marcap': [1e11, 1e11]})
+        def evaluate(stock, *args):
+            if stock['Code'] == '000010':
+                raise ConnectionError('offline')
+            return None
+        with patch.object(scanner, 'evaluate_stock_accumulation', side_effect=evaluate):
+            result = scanner.scan_smart_money_stocks(universe)
+        self.assertTrue(result.empty)
+        self.assertEqual(result.attrs['scan_summary']['failed'], 1)
+        self.assertEqual(result.attrs['scan_summary']['succeeded'], 1)
+        self.assertEqual(result.attrs['scan_summary']['errors'][0]['종목코드'], '000010')
+
+    def test_empty_price_response_is_a_scan_error(self):
+        with patch.object(scanner.fdr, 'DataReader', return_value=pd.DataFrame()):
+            with self.assertRaises(ValueError):
+                scanner.evaluate_stock_accumulation({'Code': '000010', 'Name': 'Example'}, '2025-01-01')
+
     def test_unknown_small_caps_are_excluded(self):
         d = pd.DataFrame({"Code": ["000010", "000020", "000030", "000040"],
                           "Name": ["Example"]*4, "Marcap": [0, np.nan, 9e10, 1e11], "Dept": [np.nan]*4})
