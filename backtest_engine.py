@@ -2,7 +2,7 @@ import os
 import json
 import pandas as pd
 import numpy as np
-from setup_signals import build_setup_signals, current_setups, SETUP_NAMES, SIGNAL_VERSION
+from setup_signals import build_setup_signals, current_setups, normalize_price_data, SETUP_NAMES, SIGNAL_VERSION
 
 STATS_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'backtest_stats.json')
 _CACHED_STATS = None
@@ -66,6 +66,7 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
     if setup_type != "AUTO" and setup_type not in SETUP_NAMES:
         return {'error': '지원하지 않는 셋업입니다.'}
     try:
+        df = normalize_price_data(df)
         setup_signals = build_setup_signals(df)
     except ValueError as exc:
         return {'error': str(exc)}

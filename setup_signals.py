@@ -13,7 +13,13 @@ SETUP_NAMES = {
 }
 
 
-def prepare_setup_data(df):
+def normalize_price_data(df):
+    """Normalize only bounded rounding artifacts; reject substantive bad bars.
+
+    Integer adjusted prices may put a close one unit outside the reported
+    high/low. Allow at most one unit (0.01 for fractional quotes), also capped
+    at 0.01% of the price. Never change the open, close or volume.
+    """
     required = ["Open", "High", "Low", "Close", "Volume"]
     if not set(required).issubset(df.columns):
         raise ValueError("시가·고가·저가·종가·거래량 데이터가 필요합니다.")
@@ -21,12 +27,33 @@ def prepare_setup_data(df):
         raise ValueError("가격 데이터 날짜는 중복 없이 오름차순이어야 합니다.")
     out = df.copy()
     out[required] = out[required].apply(pd.to_numeric, errors="coerce")
+    # Some feeds encode suspended sessions as zero O/H/L with a valid close.
+    suspended = (out['Volume'] == 0) & (out['Close'] > 0) & out[['Open', 'High', 'Low']].eq(0).all(axis=1)
+    for column in ('Open', 'High', 'Low'):
+        out.loc[suspended, column] = out.loc[suspended, 'Close']
     prices = out[["Open", "High", "Low", "Close"]]
     if (not np.isfinite(out[required].to_numpy(dtype=float)).all()
-            or (prices <= 0).any().any() or (out["Volume"] < 0).any()
-            or (out["High"] < prices.max(axis=1)).any()
-            or (out["Low"] > prices.min(axis=1)).any()):
+            or (prices <= 0).any().any() or (out["Volume"] < 0).any()):
         raise ValueError("가격 또는 거래량에 결측값·비정상 값이 있습니다.")
+    integral = prices.eq(np.floor(prices)).all(axis=1)
+    tolerance = np.minimum(np.where(integral, 1., .01), prices.min(axis=1) * .0001)
+    body_high = out[['Open', 'Close']].max(axis=1)
+    body_low = out[['Open', 'Close']].min(axis=1)
+    high_gap = body_high - out['High']
+    low_gap = out['Low'] - body_low
+    if ((high_gap > tolerance + 1e-9).any() or (low_gap > tolerance + 1e-9).any()
+            or (out['High'] < out['Low']).any()):
+        raise ValueError("고가·저가와 시가·종가의 차이가 허용 반올림 범위를 초과했습니다.")
+    adjusted = (high_gap > 0) | (low_gap > 0)
+    out['High'] = np.maximum(out['High'], body_high)
+    out['Low'] = np.minimum(out['Low'], body_low)
+    out.attrs['rounding_adjusted_bars'] = int(df.attrs.get('rounding_adjusted_bars', 0)) + int(adjusted.sum())
+    out.attrs['suspended_bars'] = int(df.attrs.get('suspended_bars', 0)) + int(suspended.sum())
+    return out
+
+
+def prepare_setup_data(df):
+    out = normalize_price_data(df)
     close = out["Close"]
     for period in (5, 20, 60, 200):
         out[f"MA{period}"] = close.rolling(period).mean()

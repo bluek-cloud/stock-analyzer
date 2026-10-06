@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, io, requests
 from llm_analyst import generate_rag_analyst_report
 from backtest_engine import match_current_setup, run_stock_backtest
-from setup_signals import current_setups, prepare_setup_data, SETUP_NAMES, SIGNAL_VERSION
+from setup_signals import current_setups, normalize_price_data, SETUP_NAMES, SIGNAL_VERSION
 from accumulation_scanner import scan_smart_money_stocks, evaluate_stock_accumulation_df
 
 
@@ -227,8 +227,7 @@ def get_stock_data(code, days=1825):
             df.index = df.index.tz_convert(None)
         except Exception:
             df.index = df.index.tz_localize(None)
-    prepare_setup_data(df)  # Validate bars before indicators and rule evaluation.
-    return df
+    return normalize_price_data(df)
 
 def calculate_indicators(df):
     if df.empty or len(df) < 2: return df
@@ -503,12 +502,17 @@ if app_menu == "📊 단일 종목 심층 분석":
             with st.spinner(f"📡 '{display_name}' 분석 중..."):
                 try:
                     raw_df = get_stock_data(ticker_symbol)
+                except ValueError as exc:
+                    st.error(f"시세 데이터 검증 실패: {exc}")
+                    raw_df = pd.DataFrame()
                 except Exception:
                     raw_df = pd.DataFrame()
         if raw_df.empty: 
             if ticker_symbol:
                 st.error("⚠️ 데이터를 불러올 수 없습니다. 종목명/코드를 확인하거나, 잠시 후 다시 시도해 주세요. (데이터 서버 일시 장애 가능성)")
         else:
+            if raw_df.attrs.get('rounding_adjusted_bars', 0):
+                st.caption(f"과거 시세 {raw_df.attrs['rounding_adjusted_bars']}개 봉의 미세한 고저가 반올림 차이를 보정했습니다. 종가와 거래량은 원본을 사용합니다.")
             is_short_term = "단기" in analyze_mode
             time_unit = "일" if is_short_term else "주"
             chart_df_daily = calculate_indicators(raw_df.copy())
@@ -862,7 +866,7 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
             **📐 Phase 2. 가격 위치 및 이평선 수렴 조건**
             - **장기 바닥권**: 현재 종가가 최근 1년(250영업일) 최저가 대비 **+40%~+45% 이하** (고점 설거지 패턴 원천 차단)
             - **이평선 수렴**: 20일선(MA20)과 60일선(MA60) 이격도 **±6% 이내** 극도 밀집 (에너지 응축)
-            - **기간 변동폭 억제**: 최근 20영업일(1개월) 누적 주가 등락률 **-5% ~ +10% 이내** 횡보 (시세 분출 직전)
+            - **기간 변동폭 억제**: 최근 20영업일(1개월) 누적 주가 등락률 **엄격 -5%~+10%, 후보 -5%~+12% 이내** 횡보 (시세 분출 직전)
             """)
         with col_p2:
             st.markdown("""
@@ -902,6 +906,7 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
 
     cache_key = "smart_money_scan_results_v2"
     if scan_run_btn:
+        st.session_state.pop(cache_key, None)
         krx_df = _get_krx_data_safe()
         if krx_df.empty:
             st.error("KRX 종목 데이터를 불러올 수 없습니다.")
@@ -927,6 +932,13 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
         df_results = st.session_state[cache_key]
         used_mode = st.session_state.get("smart_money_mode_used", "")
         st.divider()
+        scan_summary = df_results.attrs.get('scan_summary', {})
+        if scan_summary:
+            st.caption(f"스캔 대상 {scan_summary['total']}개 · 조회/분석 성공 {scan_summary['succeeded']}개 · 실패 {scan_summary['failed']}개")
+            if scan_summary['failed']:
+                st.warning('일부 종목의 조회 또는 분석에 실패했습니다. 실패한 종목은 조건 불일치로 간주하지 않으며 결과에서 제외됩니다.')
+                with st.expander('조회/분석 실패 종목 확인'):
+                    st.dataframe(pd.DataFrame(scan_summary['errors']), hide_index=True)
         if not df_results.empty:
             smart_count = len(df_results[df_results['has_smart_money']])
             st.success(f"🎉 **총 {len(df_results)}개**의 세력 매집 유력 종목이 포착되었습니다! (이 중 **{smart_count}개** 종목은 외인+기관 메이저 수급까지 일치)")
@@ -996,7 +1008,12 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
                 )
 
         else:
-            st.warning(f"선택하신 조건({used_mode})에 100% 일치하는 종목이 현재 스캔 범위 내에서 없습니다. 상단의 '⚡ 유망 후보 포착 모드'를 선택하거나 스캔 범위를 넓혀 다시 시도해 보세요.")
+            if scan_summary.get('total', 0) and scan_summary.get('succeeded') == 0:
+                st.error('모든 종목의 조회/분석에 실패해 스캔 결과를 판단할 수 없습니다. 데이터 연결을 확인한 뒤 다시 시도해 주세요.')
+            elif scan_summary and scan_summary['total'] == 0:
+                st.warning('시가총액 및 종목 제외 조건을 통과한 스캔 대상이 없습니다.')
+            else:
+                st.info(f"조회/분석에 성공한 종목 중 선택하신 조건({used_mode})에 일치하는 종목이 없습니다.")
 
 elif app_menu == "🎯 200일선 눌림목 포착":
     st.subheader("🎯 200일선 철벽 방어 우량주 스캐너")

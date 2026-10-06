@@ -1,9 +1,11 @@
 import requests
+import re
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import FinanceDataReader as fdr
+from setup_signals import normalize_price_data
 
 def get_investor_net_buys(code):
     """
@@ -46,18 +48,19 @@ def filter_universe_candidates(krx_df, scan_scope=500):
 
     # 2. 우선주 제외 (코드 끝자리 0이 아니거나 종목명에 우선주 식별자 포함)
     df = df[df['Code'].astype(str).str.endswith('0')]
-    pref_patterns = ['우', '우B', '우C', '1우', '2우B', '3우B', '우선주']
+    # A normal company can end in '우' (e.g. 성우); code filtering already
+    # excludes ordinary preferred-share codes. Keep only explicit name markers.
+    pref_patterns = ['우B', '우C', '1우', '2우B', '3우B', '우선주']
     pref_regex = '|'.join([f"{p}$" for p in pref_patterns]) + '|우선주'
     df = df[~df['Name'].str.contains(pref_regex, regex=True, na=False)]
 
     # 3. ETF, ETN, SPAC, 리츠, 인프라 펀드 제외
-    exclude_keywords = [
-        '스팩', 'SPAC', '리츠', 'REIT', '인프라', '투융자',
-        'ETF', 'ETN', 'KODEX', 'TIGER', 'KBSTAR', 'ACE', 'ARIRANG',
+    exclude_keywords = ['스팩', 'SPAC', '리츠', 'REIT', '투융자', 'ETF', 'ETN', '맥쿼리인프라']
+    fund_brands = ['KODEX', 'TIGER', 'KBSTAR', 'ACE', 'ARIRANG',
         'SOL', 'PLUS', 'HANARO', 'TIMEFOLIO', 'HERO', 'KOSEF',
         '파워', '마이티', 'FOCUS', 'UNIE', 'KoAct', 'WON'
     ]
-    ex_pattern = '|'.join(exclude_keywords)
+    ex_pattern = '|'.join(map(re.escape, exclude_keywords)) + r'|^(?:' + '|'.join(map(re.escape, fund_brands)) + r')\s'
     df = df[~df['Name'].str.contains(ex_pattern, case=False, na=False)]
 
     # 4. 관리종목 / 투자주의환기종목 제외
@@ -80,6 +83,7 @@ def evaluate_stock_accumulation_df(df, code="", name="", marcap=0, min_accum_can
     """
     if len(df) < 100:
         return None
+    df = normalize_price_data(df)
 
     # -------------------------------------------------------------
     # Phase 1. 유동성 및 거래정지 체크
@@ -100,7 +104,7 @@ def evaluate_stock_accumulation_df(df, code="", name="", marcap=0, min_accum_can
     max_pct_low = 40.0 if is_strict else 45.0
     max_ma_disp = 6.0 if is_strict else 6.5
     cum_ret_min = -5.0
-    cum_ret_max = 12.0 if is_strict else 10.0
+    cum_ret_max = 10.0 if is_strict else 12.0
     min_vol_growth = 95.0
     min_spike_mult = 2.5
 
@@ -243,11 +247,10 @@ def evaluate_stock_accumulation(stock, start_date, min_accum_candles=2):
     name = stock['Name']
     marcap = stock.get('Marcap', 0)
 
-    try:
-        df = fdr.DataReader(code, start=start_date)
-        return evaluate_stock_accumulation_df(df, code=code, name=name, marcap=marcap, min_accum_candles=min_accum_candles, check_investor=True)
-    except Exception:
-        return None
+    df = fdr.DataReader(code, start=start_date)
+    if df.empty:
+        raise ValueError('시세 응답이 비어 있습니다.')
+    return evaluate_stock_accumulation_df(df, code=code, name=name, marcap=marcap, min_accum_candles=min_accum_candles, check_investor=True)
 
 
 def scan_smart_money_stocks(krx_df, scan_scope=500, min_accum_candles=2, progress_bar=None, status_text=None):
@@ -257,16 +260,25 @@ def scan_smart_money_stocks(krx_df, scan_scope=500, min_accum_candles=2, progres
     candidates = filter_universe_candidates(krx_df, scan_scope=scan_scope)
     total_count = len(candidates)
     if total_count == 0:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        empty.attrs['scan_summary'] = {'total': 0, 'succeeded': 0, 'failed': 0, 'errors': []}
+        return empty
 
     start_date = (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d')
     results = []
     completed = 0
+    errors = []
 
     with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(evaluate_stock_accumulation, stock, start_date, min_accum_candles): stock for stock in candidates}
         for future in as_completed(futures):
-            res = future.result()
+            try:
+                res = future.result()
+            except Exception as exc:
+                stock = futures[future]
+                errors.append({'종목코드': stock['Code'], '종목명': stock['Name'],
+                               '오류': str(exc) if isinstance(exc, ValueError) else type(exc).__name__})
+                res = None
             if res is not None:
                 results.append(res)
             completed += 1
@@ -274,9 +286,6 @@ def scan_smart_money_stocks(krx_df, scan_scope=500, min_accum_candles=2, progres
                 progress_bar.progress(completed / total_count)
             if status_text is not None:
                 status_text.caption(f"📡 세력 매집 알고리즘 고속 병렬 스캔 중... ({completed}/{total_count} 종목 완료)")
-
-    if not results:
-        return pd.DataFrame()
 
     # Phase 4. 수급 가점 상위 랭킹 정렬
     # 1순위: 외인+기관 합산 순매수 양수(True) 여부
@@ -290,4 +299,7 @@ def scan_smart_money_stocks(krx_df, scan_scope=500, min_accum_candles=2, progres
         x['vol_growth']
     ), reverse=True)
 
-    return pd.DataFrame(results)
+    output = pd.DataFrame(results)
+    output.attrs['scan_summary'] = {'total': total_count, 'succeeded': total_count-len(errors),
+                                    'failed': len(errors), 'errors': errors}
+    return output
