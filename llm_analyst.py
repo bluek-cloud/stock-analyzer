@@ -115,7 +115,13 @@ def call_gemini_api(prompt, api_key):
             "temperature": 0.3,
             "topP": 0.8,
             "maxOutputTokens": 2048
-        }
+        },
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
     }
 
     last_error = ""
@@ -124,7 +130,7 @@ def call_gemini_api(prompt, api_key):
         url = f"https://generativelanguage.googleapis.com/v1beta/{clean_model}:generateContent?key={api_key}"
 
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=25)
+            response = requests.post(url, headers=headers, json=payload, timeout=45)
             if response.status_code == 200:
                 _WORKING_MODEL = clean_model
                 res_json = response.json()
