@@ -192,6 +192,7 @@ def generate_rag_analyst_report(stock_info, market_context, api_key=None):
 - 종목명/코드: {stock_info.get('name', '미상')} ({stock_info.get('code', '-')})
 - 현재가: {stock_info.get('current_price', '-')} {stock_info.get('currency', '원')}
 - 퀀트 종합 스코어: {stock_info.get('quant_score', 0)} / 100점
+- 분석 봉 주기: {'일봉' if market_context.get('is_short_term', True) else '주봉'}
 - 확정된 시장 국면(Regime): {market_context.get('regime', '횡보')}
 - 1차 지지선: {stock_info.get('support', 0):,} {stock_info.get('currency', '원')}
 - 1차 저항선: {('신고가(저항 없음)' if stock_info.get('resistance', 0) == 0 else f"{stock_info.get('resistance', 0):,} {stock_info.get('currency', '원')}")}
@@ -216,7 +217,7 @@ def generate_rag_analyst_report(stock_info, market_context, api_key=None):
 ### 4. 작성 가이드라인 (반드시 준수):
 1. **뜬구름 잡는 일반론이나 뻔한 교과서 설명은 절대 금지합니다.** (예: "주식은 변동성이 있으니 주의하세요" 같은 상투적 조언 배제)
 2. 반드시 상기 **[전문 트레이딩 지식 베이스]**에 명시된 원칙(캔들 꼬리 역학, 볼린저 스퀴즈/페이크, 다이버전스 신뢰도, 손익비 1:2 원칙 등)을 바탕으로 현재 주가 위치와 거래량을 직접 대조하여 해석하십시오.
-3. 상기 **[역사적 백테스트 통계]**(승률, 손익비, 평균 기대수익률)를 리포트에 직접 인용하여, 투자자에게 통계적 우위(Statistical Edge)를 근거로 진입 타당성을 제시하십시오.
+3. 검증된 통계가 제공된 경우에만 인용하십시오. 통계가 없으면 검증 자료 없음으로 명시하고 승률, 표본 수, 통계 기반 기대수익률을 만들지 마십시오. 기술적 가격 시나리오는 검증된 확률과 구분하십시오.
 4. 다음 4개 항목을 갖춘 구조적 마크다운 리포트로 작성하십시오:
    - **🏛️ [거시 수급 및 시장 국면 심층 판정]**: 현재 국면과 세력 수급의 질적 분석
    - **🔬 [RAG 전문 지식 기반 기술적 분석]**: 캔들/패턴/지표와 전문 지식 원칙의 매칭 검증

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, io, requests
 from llm_analyst import generate_rag_analyst_report
 from backtest_engine import match_current_setup, run_stock_backtest
+from setup_signals import current_setups, prepare_setup_data, SETUP_NAMES, SIGNAL_VERSION
 from accumulation_scanner import scan_smart_money_stocks, evaluate_stock_accumulation_df
 
 
@@ -111,10 +112,17 @@ def get_krx_data():
             df_kind['Market'] = 'KRX'
             df_kind['Marcap'] = 0
             df_kind['Dept'] = ''
-            try:
-                df_kind[['Code', 'Name', 'Market', 'Marcap', 'Dept']].to_csv(CACHE_FILE, index=False)
-            except Exception:
-                pass
+            if os.path.exists(CACHE_FILE):
+                cached = pd.read_csv(CACHE_FILE, dtype={'Code': str})
+                caps = pd.to_numeric(cached.get('Marcap', pd.Series(dtype=float)), errors='coerce')
+                if caps.gt(0).any():
+                    cached['Code'] = cached['Code'].astype(str).str.zfill(6)
+                    df_kind = df_kind.drop(columns=['Marcap', 'Dept']).merge(
+                        cached[['Code', 'Marcap'] + (['Dept'] if 'Dept' in cached else [])],
+                        on='Code', how='left')
+                    if 'Dept' not in df_kind:
+                        df_kind['Dept'] = ''
+                    st.warning('실시간 시가총액 조회 실패: 저장된 시가총액을 사용합니다. 신규 종목은 스캔에서 제외됩니다.')
             return df_kind[['Code', 'Name', 'Market', 'Marcap', 'Dept']]
     except Exception:
         pass
@@ -219,6 +227,7 @@ def get_stock_data(code, days=1825):
             df.index = df.index.tz_convert(None)
         except Exception:
             df.index = df.index.tz_localize(None)
+    prepare_setup_data(df)  # Validate bars before indicators and rule evaluation.
     return df
 
 def calculate_indicators(df):
@@ -311,7 +320,7 @@ def detect_patterns_and_levels(df):
     # 1. 망치형 / 교수형 정밀 판정 (위치에 따른 분기)
     if candle_range > 0:
         if body <= candle_range * 0.35 and lower_shadow >= candle_range * 0.5 and upper_shadow <= candle_range * 0.15:
-            is_pullback = (not pd.isna(latest['MA20']) and latest['Close'] <= latest['MA20']) or (len(df) >= 5 and latest['Close'] < df['Close'].iloc[-5])
+            is_pullback = (not pd.isna(latest['MA20']) and latest['Close'] <= latest['MA20']) or (len(df) >= 6 and latest['Close'] < df['Close'].iloc[-6])
             if is_pullback:
                 patterns.append("🔨 망치형 (바닥권 반등 신호)")
             else:
@@ -400,6 +409,10 @@ def scan_200_pullback(top_n=200):
     krx_df = _get_krx_data_safe()
     if krx_df.empty: return pd.DataFrame()
     krx_df['Marcap'] = pd.to_numeric(krx_df['Marcap'], errors='coerce')
+    krx_df = krx_df[krx_df['Marcap'].notna() & (krx_df['Marcap'] > 0)]
+    if krx_df.empty:
+        st.error('시가총액 자료가 없어 시총 상위 스캔을 실행할 수 없습니다.')
+        return pd.DataFrame()
     target_stocks = krx_df.sort_values('Marcap', ascending=False).head(top_n)
     
     start_date_str = (datetime.now() - timedelta(days=400)).strftime('%Y-%m-%d')
@@ -410,24 +423,11 @@ def scan_200_pullback(top_n=200):
         try:
             df = fdr.DataReader(code, start=start_date_str)
             if len(df) < 210: return None
-            df['MA5'] = df['Close'].rolling(5).mean()
+            if "MA200_PULLBACK" not in current_setups(df):
+                return None
             df['MA200'] = df['Close'].rolling(200).mean()
             latest, prev = df.iloc[-1], df.iloc[-2]
-            
-            # 1. 200일선 우상향 확인 (최근 10거래일 전 대비 상승 또는 수평)
-            if latest['MA200'] < df['MA200'].iloc[-10]: return None
-            
-            # 2. 200일선 부근 지지/눌림목 확인 (전일 또는 당일 저가가 200일선의 97%~104% 사이)
-            near_200 = (0.97 <= prev['Low'] / prev['MA200'] <= 1.04) or (0.97 <= latest['Low'] / latest['MA200'] <= 1.04)
-            if not near_200: return None
-            
-            # 3. 당일 양봉 확인
-            if latest['Close'] <= latest['Open']: return None
-            
-            # 4. 5일선 골든크로스 또는 5일선 지지 돌파
-            crossed_5 = (prev['Close'] <= prev['MA5'] and latest['Close'] > latest['MA5']) or (latest['Low'] <= latest['MA5'] and latest['Close'] > latest['MA5'])
-            if not crossed_5: return None
-            
+
             disparity = (latest['Close'] / latest['MA200'] - 1) * 100
             diff_pct = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
             return {
@@ -743,43 +743,30 @@ if app_menu == "📊 단일 종목 심층 분석":
                         'patterns': pts,
                         'bullish_div': bullish_div,
                         'is_falling_knife': is_falling_knife,
-                        'is_short_term': is_short_term
+                        'is_short_term': is_short_term,
+                        'matched_setups': comments.get('matched_setups', [])
                     }
                     matched_key, matched_stats = match_current_setup(market_ctx_dict, patterns=pts)
 
-                    if matched_stats:
-                        st.markdown(f"#### 🎯 감지된 셋업: **[{matched_stats['name']}]**")
-                        st.caption(f"💡 {matched_stats['benchmark_note']}")
-                        
-                        mb1, mb2, mb3, mb4 = st.columns(4)
-                        mb1.metric("20거래일 보유 승률", f"{matched_stats['win_rate_20d']}%", f"5일: {matched_stats['win_rate_5d']}%")
-                        mb2.metric("손익비 (Profit Factor)", f"{matched_stats['profit_factor']} : 1")
-                        mb3.metric("평균 기대 수익률", f"+{matched_stats['avg_return_20d']}%", f"최대 반등: +{matched_stats['avg_mfe']}%")
-                        mb4.metric("검증 표본 수", f"{matched_stats['sample_count']:,} 건")
-                        
-                        st.info(f"🎯 **실전 통계 가이드:** 권장 손절폭 **-{matched_stats['recommended_sl_pct']}%** | 1차 목표 익절 **+{matched_stats['recommended_tp_pct']}%** (평균 최대 낙폭: -{matched_stats['avg_mae']}%)")
-                        sim_setup_type = matched_key
-                        sim_setup_name = matched_stats['name']
+                    sim_setup_type = matched_key or "AUTO"
+                    sim_setup_name = SETUP_NAMES.get(matched_key, "종합 반등 셋업")
+                    if matched_key:
+                        st.markdown(f"#### 🎯 감지된 셋업: **[{sim_setup_name}]**")
                     else:
-                        st.info("💡 현재 시점에는 특정 반등 셋업이 감지되지 않았습니다. 하지만 과거 5년 차트의 **유사 기술적 반등 타점 전체(종합)**를 대상으로 승률을 역추적 시뮬레이션할 수 있습니다.")
-                        sim_setup_type = "AUTO"
-                        sim_setup_name = "종합 반등 셋업"
+                        st.info("현재 공통 판정 조건을 충족한 셋업이 없습니다. 아래에서는 과거 종합 반등 셋업을 탐색할 수 있습니다.")
+                    st.caption("기존 시장 평균 승률은 산출 근거가 확인되지 않아 표시하지 않습니다. 아래 종목별 계산 결과를 확인하세요.")
 
                     # 인터랙티브 종목별 실전 시뮬레이션
-                    with st.expander(f"🎯 이 종목에서의 [{sim_setup_name}] 과거 실전 승률 즉석 시뮬레이션", expanded=True):
-                        st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 발생한 실제 타점 성과를 실시간 계산합니다.")
+                    with st.expander(f"🎯 이 종목에서의 [{sim_setup_name}] 과거 신호 성과 계산", expanded=True):
+                        st.caption(f"'{display_name}'의 과거 전체 차트(최대 5년)에서 발생한 동일 조건의 신호 성과를 계산합니다. 신호 확정 종가에 진입한 가정이며 비용·슬리피지 미반영, 중복 보유 기간을 포함한 신호별 통계입니다.")
                         last_date_str = str(chart_df.index[-1].date()) if hasattr(chart_df.index[-1], 'date') else str(chart_df.index[-1])[:10]
-                        sim_btn = st.button("🚀 과거 실전 승률 계산 실행", key="btn_run_sim", use_container_width=True)
-                        sim_cache_key = f"sim_{ticker_symbol}_{sim_setup_type}_{is_short_term}_{last_date_str}"
+                        sim_btn = st.button("🚀 과거 신호 성과 계산 실행", key="btn_run_sim", use_container_width=True)
+                        data_fingerprint = str(int(pd.util.hash_pandas_object(chart_df, index=True).sum()))
+                        sim_cache_key = f"sim_v{SIGNAL_VERSION}_{data_fingerprint}_{ticker_symbol}_{sim_setup_type}_{is_short_term}_{last_date_str}"
 
                         if sim_btn:
                             with st.spinner("⏳ 과거 전체 차트 스캔 및 타점 역추적 시뮬레이션 중..."):
                                 sim_result = run_stock_backtest(chart_df, setup_type=sim_setup_type, hold_days=20)
-                                if sim_result.get('total_trades', 0) == 0 and sim_setup_type != "AUTO":
-                                    fallback_sim = run_stock_backtest(chart_df, setup_type="AUTO", hold_days=20)
-                                    if fallback_sim.get('total_trades', 0) > 0:
-                                        fallback_sim['fallback_note'] = f"현재 종목에서는 [{sim_setup_name}] 단독 표본이 적어, 유사 반등 셋업 전체(종합)로 자동 확장 시뮬레이션했습니다."
-                                        sim_result = fallback_sim
                                 st.session_state[sim_cache_key] = sim_result
 
                         if sim_cache_key in st.session_state:
@@ -789,11 +776,9 @@ if app_menu == "📊 단일 종목 심층 분석":
                             elif sim_res.get('total_trades', 0) == 0:
                                 st.info(sim_res.get('message', '타점이 포착되지 않았습니다.'))
                             else:
-                                if 'fallback_note' in sim_res:
-                                    st.caption(f"💡 {sim_res['fallback_note']}")
                                 sc1, sc2, sc3, sc4 = st.columns(4)
                                 sc1.metric("과거 총 타점", f"{sim_res['total_trades']} 회")
-                                sc2.metric("실제 승률", f"{sim_res['win_rate']}%", f"{sim_res['win_trades']}승 {sim_res['loss_trades']}패")
+                                sc2.metric("과거 신호 승률", f"{sim_res['win_rate']}%", f"{sim_res['win_trades']}승 {sim_res['loss_trades']}패")
                                 sc3.metric("평균 수익률", f"{sim_res['avg_return']:+.2f}%")
                                 sc4.metric("손익비", f"{sim_res['profit_factor']} : 1")
 
@@ -818,7 +803,7 @@ if app_menu == "📊 단일 종목 심층 분석":
                     st.markdown("#### 🧠 월가 수석 애널리스트 RAG 심층 진단")
                     st.caption("전문 트레이딩 지식 베이스(캔들 역학, 볼린저, 다이버전스, 리스크 관리)를 실시간 검색(RAG)하여 Gemini AI가 종합 분석합니다.")
                     
-                    rag_cache_key = f"rag_report_{ticker_symbol}_{is_short_term}_{last_date_str}"
+                    rag_cache_key = f"rag_report_v{SIGNAL_VERSION}_{data_fingerprint}_{ticker_symbol}_{is_short_term}_{last_date_str}"
                     c_btn_l, c_btn_r = st.columns([0.3, 0.7])
                     with c_btn_l:
                         gen_btn = st.button("🚀 AI 심층 리포트 생성", key="btn_rag_report", type="primary", use_container_width=True)
@@ -847,7 +832,8 @@ if app_menu == "📊 단일 종목 심층 분석":
                                 'patterns': pts,
                                 'bullish_div': bullish_div,
                                 'is_falling_knife': is_falling_knife,
-                                'is_short_term': is_short_term
+                                'is_short_term': is_short_term,
+                                'matched_setups': comments.get('matched_setups', [])
                             }
                             api_key_to_use = user_gemini_key if user_gemini_key else None
                             rag_result = generate_rag_analyst_report(stock_info_dict, market_ctx_dict, api_key=api_key_to_use)
@@ -874,16 +860,16 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
             - **최소 유동성**: 최근 20영업일 평균 거래대금 10억 원 이상
 
             **📐 Phase 2. 가격 위치 및 이평선 수렴 조건**
-            - **장기 바닥권**: 현재 종가가 최근 1년(250영업일) 최저가 대비 **+30% 이하** (고점 설거지 패턴 원천 차단)
-            - **이평선 수렴**: 20일선(MA20)과 60일선(MA60) 이격도 **±5% 이내** 극도 밀집 (에너지 응축)
-            - **기간 변동폭 억제**: 최근 20영업일(1개월) 누적 주가 등락률 **-3% ~ +5% 이내** 횡보 (시세 분출 직전)
+            - **장기 바닥권**: 현재 종가가 최근 1년(250영업일) 최저가 대비 **+40%~+45% 이하** (고점 설거지 패턴 원천 차단)
+            - **이평선 수렴**: 20일선(MA20)과 60일선(MA60) 이격도 **±6% 이내** 극도 밀집 (에너지 응축)
+            - **기간 변동폭 억제**: 최근 20영업일(1개월) 누적 주가 등락률 **-5% ~ +10% 이내** 횡보 (시세 분출 직전)
             """)
         with col_p2:
             st.markdown("""
             **🌋 Phase 3. 거래량 폭증 및 매집봉 감지**
-            - **평균 거래량 대비**: 최근 20영업일 평균 거래량이 직전 60영업일 평균 대비 **150% 이상** 증가
+            - **평균 거래량 유지**: 최근 20영업일 평균 거래량이 직전 60영업일 대비 유지 (수급 이탈 방지)
             - **매집봉 조건**: 최근 20영업일 이내 아래 조건을 만족하는 일봉이 발생:
-              1. 당일 거래량이 직전 20일 평균 거래량 대비 **300% 이상(3배)** 폭증
+              1. 당일 거래량이 직전 20일 평균 거래량 대비 **250%~300% 이상** 폭증
               2. 종가가 시가보다 높거나 같은 양봉(또는 윗꼬리 도지), 장대 음봉 제외
               3. **가격 방어**: 매집봉 발생 이후 현재까지 종가가 해당 매집봉의 저가를 단 한 번도 하회하지 않을 것
 
@@ -914,11 +900,13 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
 
     scan_run_btn = st.button("🚀 세력 매집 스캐너 가동", type="primary", use_container_width=True)
 
-    cache_key = "smart_money_scan_results"
+    cache_key = "smart_money_scan_results_v2"
     if scan_run_btn:
         krx_df = _get_krx_data_safe()
         if krx_df.empty:
             st.error("KRX 종목 데이터를 불러올 수 없습니다.")
+        elif not pd.to_numeric(krx_df['Marcap'], errors='coerce').gt(0).any():
+            st.error('시가총액 자료가 없어 최소 시총 조건을 검증할 수 없습니다. 목록 조회 후 다시 실행해 주세요.')
         else:
             prog_bar = st.progress(0)
             status_txt = st.empty()
@@ -977,9 +965,9 @@ elif app_menu == "💎 세력 매집 급등전야 포착":
             display_df['이평이격'] = display_df['이평이격'].apply(lambda x: f"{x:.1f}%")
             display_df['20일등락률'] = display_df['20일등락률'].apply(lambda x: f"{x:+.1f}%")
             display_df['거래량증가율'] = display_df['거래량증가율'].apply(lambda x: f"{x:.0f}%")
-            display_df['외인순매수(20일)'] = display_df['외인순매수(20일)'].apply(lambda x: f"{x:+,} 주")
-            display_df['기관순매수(20일)'] = display_df['기관순매수(20일)'].apply(lambda x: f"{x:+,} 주")
-            display_df['합산순매수'] = display_df['합산순매수'].apply(lambda x: f"{x:+,} 주")
+            display_df['외인순매수(20일)'] = display_df['외인순매수(20일)'].apply(lambda x: "미확인" if pd.isna(x) else f"{x:+,.0f} 주")
+            display_df['기관순매수(20일)'] = display_df['기관순매수(20일)'].apply(lambda x: "미확인" if pd.isna(x) else f"{x:+,.0f} 주")
+            display_df['합산순매수'] = display_df['합산순매수'].apply(lambda x: "미확인" if pd.isna(x) else f"{x:+,.0f} 주")
 
             cols_order = [
                 '수급 판정', '종목명', '종목코드', '현재가',

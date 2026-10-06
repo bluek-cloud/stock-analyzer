@@ -3,6 +3,7 @@ import yaml
 import pandas as pd
 import numpy as np
 from backtest_engine import match_current_setup, format_stats_for_report
+from setup_signals import detect_bullish_divergence, current_setups
 
 # ==========================================
 # 1. 룰셋 로더 및 캐시 관리
@@ -80,34 +81,6 @@ def evaluate_market_regime(df, latest):
 # ==========================================
 # 3. 보조 지표 및 다이버전스 분석
 # ==========================================
-def detect_bullish_divergence(df):
-    """주가 신저가 형성 시 RSI 또는 OBV의 저점 상승(상승 다이버전스) 감지"""
-    if len(df) < 15:
-        return False
-
-    recent_chunk = df.iloc[-4:]
-    past_chunk = df.iloc[-30:-4] if len(df) >= 30 else df.iloc[:-4]
-    if past_chunk.empty or recent_chunk.empty:
-        return False
-
-    p_min_idx = past_chunk['Low'].idxmin()
-    r_min_idx = recent_chunk['Low'].idxmin()
-    p_low = float(past_chunk.loc[p_min_idx, 'Low'])
-    r_low = float(recent_chunk.loc[r_min_idx, 'Low'])
-
-    # 최근 저가가 이전 저가 이하이거나 거의 유사(신저가 형성)
-    if r_low <= p_low * 1.01:
-        p_rsi = float(past_chunk.loc[p_min_idx, 'RSI']) if ('RSI' in past_chunk.columns and not pd.isna(past_chunk.loc[p_min_idx, 'RSI'])) else None
-        r_rsi = float(recent_chunk.loc[r_min_idx, 'RSI']) if ('RSI' in recent_chunk.columns and not pd.isna(recent_chunk.loc[r_min_idx, 'RSI'])) else None
-        p_obv = float(past_chunk.loc[p_min_idx, 'OBV']) if ('OBV' in past_chunk.columns and not pd.isna(past_chunk.loc[p_min_idx, 'OBV'])) else None
-        r_obv = float(recent_chunk.loc[r_min_idx, 'OBV']) if ('OBV' in recent_chunk.columns and not pd.isna(recent_chunk.loc[r_min_idx, 'OBV'])) else None
-
-        if (r_rsi is not None and p_rsi is not None and r_rsi > p_rsi + 2.0) or \
-           (r_obv is not None and p_obv is not None and r_obv > p_obv):
-            return True
-    return False
-
-
 # ==========================================
 # 4. 전략 및 포지션 도출 엔진
 # ==========================================
@@ -269,7 +242,8 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     simple_prev_obv = float(df['OBV'].iloc[-obv_lookback]) if 'OBV' in df.columns else 0.0
 
     # 1. 다이버전스 감지
-    bullish_div = detect_bullish_divergence(df)
+    matched_setups = current_setups(df)
+    bullish_div = "BULLISH_DIVERGENCE" in matched_setups
 
     # 2. 시장 국면 판정
     regime = evaluate_market_regime(df, latest)
@@ -379,13 +353,13 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         ai_op += "⏱️ **[MTF 다중 시간대 분석]**\n\n"
         if regime in ["강세 추세", "상승 조정"]:
             b_cfg = mtf_rules.get('bullish_trends', {})
-            ai_op += (b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) + "\n\n"
+            ai_op += ((b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) or '• 장기 흐름 설명을 불러오지 못했습니다.') + "\n\n"
         elif regime == "약세 추세":
             b_cfg = mtf_rules.get('bear_trends', {})
-            ai_op += (b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) + "\n\n"
+            ai_op += ((b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) or '• 장기 흐름 설명을 불러오지 못했습니다.') + "\n\n"
         elif regime == "횡보 박스":
             b_cfg = mtf_rules.get('range_trends', {})
-            ai_op += (b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) + "\n\n"
+            ai_op += ((b_cfg.get('bull') if weekly_bullish else b_cfg.get('bear')) or '• 장기 흐름 설명을 불러오지 못했습니다.') + "\n\n"
         else:
             ai_op += mtf_rules.get('default', "• **장기 흐름:** 장기 흐름에 동조화되어 에너지가 응축/분출되는 변곡점 구간입니다.") + "\n\n"
 
@@ -424,8 +398,10 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
         if vol_ratio < 70 or (min(latest_open, close) - latest_low) > body * 1.5:
             ai_op += traps.get('bear_trap', "🚨 **[가짜 하락(Bear Trap) 주의]** 지지를 이탈했으나 하락 물량 방어 흔적(아랫꼬리)이 보입니다. 일시적 충격일 수 있습니다.\n\n")
 
-    # 역사적 백테스트 통계 자동 삽입
+    # 검증된 통계만 삽입
     _, matched_stats = match_current_setup({
+        'matched_setups': matched_setups,
+        'is_short_term': is_short_term,
         'regime': regime,
         'bullish_div': bullish_div,
         'is_falling_knife': is_falling_knife,
@@ -453,6 +429,7 @@ def generate_detailed_opinions(df, sup, res, currency, decimals, is_short_term, 
     comments['AI'] = f"{ai_op}🎯 **최종 투자 전략 요약:** {strategy} (AI 권장 포지션: **{pos}**)"
 
     # 텍스트 파싱 의존을 원천 차단하기 위한 원본 불리언 및 레짐 데이터 제공
+    comments['matched_setups'] = matched_setups
     comments['regime_raw'] = regime
     comments['bullish_div_raw'] = bullish_div
     comments['is_falling_knife_raw'] = is_falling_knife

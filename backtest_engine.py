@@ -2,6 +2,7 @@ import os
 import json
 import pandas as pd
 import numpy as np
+from setup_signals import build_setup_signals, current_setups, SETUP_NAMES, SIGNAL_VERSION
 
 STATS_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'backtest_stats.json')
 _CACHED_STATS = None
@@ -24,47 +25,30 @@ def load_backtest_stats():
     return _CACHED_STATS
 
 
-def match_current_setup(market_ctx, patterns=None):
-    """
-    현재 종목의 기술적 지표 및 패턴을 기반으로 가장 적합한 6대 셋업 통계를 매칭
-    """
-    stats = load_backtest_stats()
-    if not stats:
+def verified_stats(stats):
+    """Legacy constants are not evidence; only documented, versioned daily results qualify."""
+    if not isinstance(stats, dict):
+        return False
+    provenance = stats.get('provenance', {})
+    return (stats.get('verification_status') == 'verified'
+            and stats.get('signal_version') == SIGNAL_VERSION
+            and stats.get('timeframe') == 'daily'
+            and isinstance(provenance, dict)
+            and all(provenance.get(k) for k in ('source', 'period', 'universe', 'trade_log', 'generator')))
+
+
+def match_current_setup(market_ctx, patterns=None, df=None):
+    """Match shared OHLCV signals, never infer a setup from a regime label."""
+    if market_ctx.get('is_falling_knife', False):
         return None, None
-
-    patterns = patterns or market_ctx.get('patterns', [])
-    regime = market_ctx.get('regime', '')
-    bullish_div = market_ctx.get('bullish_div', False)
-    is_falling_knife = market_ctx.get('is_falling_knife', False)
-
-    if is_falling_knife:
+    setups = current_setups(df) if df is not None else market_ctx.get('matched_setups', [])
+    key = next((k for k in SETUP_NAMES if k in setups), None)
+    if key is None:
         return None, None
-
-    # 1. 상승 다이버전스 셋업
-    if bullish_div and "BULLISH_DIVERGENCE" in stats:
-        return "BULLISH_DIVERGENCE", stats["BULLISH_DIVERGENCE"]
-
-    # 2. 볼린저 스퀴즈 분출 셋업
-    if ("스퀴즈" in regime or "폭발" in regime) and "BOLLINGER_SQUEEZE_BREAKOUT" in stats:
-        return "BOLLINGER_SQUEEZE_BREAKOUT", stats["BOLLINGER_SQUEEZE_BREAKOUT"]
-
-    # 3. 캔들 패턴 기반 매칭
-    for p in patterns:
-        if "상승 장악형" in p and "BULLISH_ENGULFING" in stats:
-            return "BULLISH_ENGULFING", stats["BULLISH_ENGULFING"]
-        if "망치형" in p and "HAMMER_BOTTOM" in stats:
-            return "HAMMER_BOTTOM", stats["HAMMER_BOTTOM"]
-
-    # 4. 강세 추세 / 200일선 지지 셋업
-    if "강세" in regime and "MA200_PULLBACK" in stats:
-        return "MA200_PULLBACK", stats["MA200_PULLBACK"]
-
-    # 5. 박스권 돌파 / 횡보 셋업
-    if "횡보" in regime and "BOX_BREAKOUT" in stats:
-        return "BOX_BREAKOUT", stats["BOX_BREAKOUT"]
-
-    # 기본 매칭: 일치하는 조건이 없으면 None 반환
-    return None, None
+    stats = load_backtest_stats().get(key)
+    if not market_ctx.get('is_short_term', True) or not verified_stats(stats):
+        stats = None
+    return key, stats
 
 
 def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
@@ -74,92 +58,24 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
     """
     if len(df) < 60:
         return {
-            'error': '시뮬레이션을 위한 데이터가 부족합니다 (최소 60거래일 이상 필요).'
+            'error': '시뮬레이션을 위한 데이터가 부족합니다 (최소 60개 봉 필요).'
         }
 
-    df = df.copy()
-    close = df['Close']
-    open_p = df['Open']
-    high = df['High']
-    low = df['Low']
-
-    # 보조 지표 계산 (없는 경우 보충)
-    if 'MA20' not in df.columns:
-        df['MA20'] = close.rolling(20).mean()
-    if 'MA60' not in df.columns:
-        df['MA60'] = close.rolling(60).mean()
-    if 'MA200' not in df.columns:
-        df['MA200'] = close.rolling(200).mean()
-    if 'BB_Upper' not in df.columns:
-        std = close.rolling(20).std()
-        df['BB_Upper'] = df['MA20'] + (std * 2)
-    if 'RSI' not in df.columns:
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0)
-        avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-        both_zero = (avg_gain == 0) & (avg_loss == 0)
-        rs = avg_gain / (avg_loss + 1e-10)
-        rsi = 100 - (100 / (1 + rs))
-        df['RSI'] = rsi.mask(both_zero, 50.0)
-
+    if not isinstance(hold_days, int) or hold_days <= 0:
+        return {'error': '보유 봉 수는 양의 정수여야 합니다.'}
+    if setup_type != "AUTO" and setup_type not in SETUP_NAMES:
+        return {'error': '지원하지 않는 셋업입니다.'}
+    try:
+        setup_signals = build_setup_signals(df)
+    except ValueError as exc:
+        return {'error': str(exc)}
+    close, high, low = (pd.to_numeric(df[k]) for k in ('Close', 'High', 'Low'))
     signals = []
-    # 과거 전체 봉 순회 (hold_days 전까지만 진입 가능)
+    # Signal-close event study. Overlapping events are retained, not a portfolio simulation.
     for i in range(20, len(df) - hold_days):
-        matched = False
+        row = setup_signals.iloc[i]
+        matched = bool(row.any()) if setup_type == "AUTO" else bool(row[setup_type])
         cur_close = close.iloc[i]
-        cur_open = open_p.iloc[i]
-        cur_high = high.iloc[i]
-        cur_low = low.iloc[i]
-        prev_close = close.iloc[i-1]
-        prev_open = open_p.iloc[i-1]
-
-        # 1. 200일선 눌림목
-        if setup_type in ["MA200_PULLBACK", "AUTO"]:
-            ma200 = df['MA200'].iloc[i]
-            if not pd.isna(ma200) and i >= 210:
-                ma200_prev10 = df['MA200'].iloc[i-10]
-                if ma200 >= ma200_prev10 and (0.97 <= cur_low / ma200 <= 1.04) and cur_close > cur_open:
-                    matched = True
-
-        # 2. 상승 장악형
-        if not matched and setup_type in ["BULLISH_ENGULFING", "AUTO"]:
-            prev_body = abs(prev_open - prev_close)
-            cur_body = abs(cur_close - cur_open)
-            if prev_close < prev_open and cur_close > cur_open:
-                if cur_open <= prev_close and cur_close >= prev_open and cur_body >= prev_body:
-                    matched = True
-
-        # 3. 망치형 캔들
-        if not matched and setup_type in ["HAMMER_BOTTOM", "AUTO"]:
-            c_range = cur_high - cur_low
-            body = abs(cur_close - cur_open)
-            lower_shadow = min(cur_open, cur_close) - cur_low
-            upper_shadow = cur_high - max(cur_open, cur_close)
-            if c_range > 0 and body <= c_range * 0.35 and lower_shadow >= c_range * 0.5 and upper_shadow <= c_range * 0.15:
-                is_pullback = (not pd.isna(df['MA20'].iloc[i]) and cur_close <= df['MA20'].iloc[i]) or (i >= 5 and cur_close < close.iloc[i-5])
-                if is_pullback:
-                    matched = True
-
-        # 4. RSI 과매도 반등
-        if not matched and setup_type in ["BULLISH_DIVERGENCE", "AUTO"]:
-            rsi_val = df['RSI'].iloc[i]
-            if not pd.isna(rsi_val) and rsi_val < 35 and cur_close > prev_close:
-                matched = True
-
-        # 5. 볼린저 밴드 상방 돌파
-        if not matched and setup_type in ["BOLLINGER_SQUEEZE_BREAKOUT", "AUTO"]:
-            bb_up = df['BB_Upper'].iloc[i]
-            if not pd.isna(bb_up) and cur_close > bb_up and cur_close > cur_open:
-                matched = True
-
-        # 6. 박스권 상단 돌파
-        if not matched and setup_type in ["BOX_BREAKOUT", "AUTO"]:
-            if i >= 21:
-                prev_20_high = high.iloc[i-20:i].max()
-                if cur_close > prev_20_high and cur_close > cur_open:
-                    matched = True
-
         if matched:
             # 진입 후 hold_days 경과 후 종가 확인
             exit_close = close.iloc[i + hold_days]
@@ -183,6 +99,7 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
 
             signals.append({
                 'entry_date': entry_date,
+                'setups': [k for k in SETUP_NAMES if row[k]],
                 'entry_price': entry_p,
                 'exit_date': exit_date,
                 'exit_price': exit_p,
@@ -226,7 +143,7 @@ def run_stock_backtest(df, setup_type="AUTO", hold_days=20):
 
 def format_stats_for_report(matched_stats):
     """Level 1 리포트에 삽입할 통계 요약 마크다운 텍스트"""
-    if not matched_stats:
+    if not verified_stats(matched_stats):
         return ""
 
     text = f"📊 **[역사적 백테스트 통계 & 기대 확률]**\n\n"
@@ -239,8 +156,8 @@ def format_stats_for_report(matched_stats):
 
 def format_stats_for_llm(matched_stats):
     """Gemini LLM 프롬프트에 주입할 통계 텍스트"""
-    if not matched_stats:
-        return "참조할 역사적 백테스트 통계 없음."
+    if not verified_stats(matched_stats):
+        return "검증된 역사적 백테스트 통계 없음. 승률·표본수·통계 기반 목표가를 추정하거나 인용하지 마세요."
 
     return (
         f"- 매칭된 셋업: {matched_stats['name']}\n"
