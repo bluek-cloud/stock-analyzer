@@ -82,26 +82,52 @@ def get_krx_data():
     today = datetime.now()
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
+    # 0. FinanceDataReader 정규 함수 최우선 시도 (공식 KRX 시가총액 데이터)
+    try:
+        df_fdr = fdr.StockListing('KRX')
+        if not df_fdr.empty and 'Marcap' in df_fdr.columns and pd.to_numeric(df_fdr['Marcap'], errors='coerce').gt(0).any():
+            df_fdr['Code'] = df_fdr['Code'].astype(str).str.zfill(6)
+            cols = ['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df_fdr.columns else [])
+            res = df_fdr[cols].copy()
+            try:
+                res.to_csv(CACHE_FILE, index=False)
+            except Exception:
+                pass
+            return res
+    except Exception:
+        pass
+
     # 1. GitHub 캐시 (오늘부터 과거 14일 역추적하여 존재하는 최신 파일 로드)
     for i in range(14):
         dt_str = (today - timedelta(days=i)).strftime('%Y-%m-%d')
         url = f'https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache/refs/heads/master/data/listing/krx/{dt_str}.csv'
         try:
-            r = requests.head(url, headers=headers, timeout=2)
+            r = requests.get(url, headers=headers, timeout=5)
             if r.status_code == 200:
-                df = pd.read_csv(url, dtype={'Code': str, 'Dept': str, 'ChangeCode': str, 'MarketId': str})
-                if not df.empty:
+                df = pd.read_csv(io.StringIO(r.text), dtype={'Code': str, 'Dept': str, 'ChangeCode': str, 'MarketId': str})
+                if not df.empty and 'Marcap' in df.columns and pd.to_numeric(df['Marcap'], errors='coerce').gt(0).any():
                     df['Code'] = df['Code'].astype(str).str.zfill(6)
+                    cols_save = ['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df.columns else [])
                     try:
-                        cols_save = ['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df.columns else [])
                         df[cols_save].to_csv(CACHE_FILE, index=False)
                     except Exception:
                         pass
-                    return df[['Code', 'Name', 'Market', 'Marcap'] + (['Dept'] if 'Dept' in df.columns else [])]
+                    return df[cols_save]
         except Exception:
             continue
             
-    # 2. 한국거래소 KIND 공식 상장회사 목록 다운로드 (100% 실시간 작동)
+    # 2. 로컬 디스크 캐시 파일 로드 (오프라인/네트워크 장애 대비 최우선 백업)
+    if os.path.exists(CACHE_FILE):
+        try:
+            df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
+            caps = pd.to_numeric(df_local.get('Marcap', pd.Series(dtype=float)), errors='coerce')
+            if caps.gt(0).any():
+                df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
+                return df_local
+        except Exception:
+            pass
+
+    # 3. 한국거래소 KIND 공식 상장회사 목록 다운로드 (100% 실시간 작동)
     try:
         url = 'http://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13'
         r = requests.get(url, headers=headers, timeout=5)
@@ -126,15 +152,6 @@ def get_krx_data():
             return df_kind[['Code', 'Name', 'Market', 'Marcap', 'Dept']]
     except Exception:
         pass
-
-    # 3. 로컬 디스크 캐시 파일 로드 (오프라인/네트워크 장애 대비)
-    if os.path.exists(CACHE_FILE):
-        try:
-            df_local = pd.read_csv(CACHE_FILE, dtype={'Code': str})
-            df_local['Code'] = df_local['Code'].astype(str).str.zfill(6)
-            return df_local
-        except Exception:
-            pass
 
     raise ConnectionError("KRX 종목 목록을 가져올 수 없습니다.")
 
